@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--version" ]]; then
+  echo "codex-cli test-double"
+  exit 0
+fi
+
+if [[ "${1:-}" == "exec" && "${2:-}" == "--help" ]]; then
+  echo "codex exec --json --sandbox resume review"
+  exit 0
+fi
+
+while IFS= read -r _line; do
+  :
+done
+
+printf '%s\n' \
+  '{"type":"thread.started","thread_id":"test-session"}' \
+  '{"type":"turn.started"}' \
+  '{"type":"item.started","item":{"type":"command_execution","command":"git status"}}' \
+  '{"type":"item.completed","item":{"type":"command_execution","status":"completed","exit_code":0,"aggregated_output":"clean\\n"}}' \
+  '{"type":"item.completed","item":{"type":"agent_message","text":"Fake Codex completed."}}' \
+  '{"type":"turn.completed"}'
