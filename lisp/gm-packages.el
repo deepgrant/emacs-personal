@@ -5,10 +5,21 @@
 
 (declare-function global-diff-hl-mode "diff-hl")
 (declare-function diff-hl-flydiff-mode "diff-hl-flydiff")
+(declare-function gm/treemacs-reveal-current-file "gm-project")
+(declare-function gm/treemacs-root-up "gm-project")
+(declare-function gm/treemacs-setup-buffer "gm-project")
+(declare-function gm/treemacs-show-home "gm-project")
+(declare-function lsp-dependency "lsp-mode")
+(declare-function treemacs-follow-mode "treemacs-follow-mode")
 
 (defvar corfu-auto-delay)
 (defvar lsp-clients-angular-language-server-command)
 (defvar lsp-completion-provider)
+(defvar lsp-metals-java-home)
+(defvar lsp-metals-metals-store-path)
+(defvar lsp-metals-server-command)
+(defvar treemacs-mode-map)
+(defvar treemacs-user-header-line-format)
 (defvar use-package-always-defer)
 (defvar use-package-always-ensure)
 (defvar use-package-expand-minimally)
@@ -121,9 +132,19 @@
         treemacs-follow-after-init t
         treemacs-is-never-other-window t
         treemacs-show-hidden-files t
-        treemacs-silent-refresh t)
+        treemacs-silent-refresh t
+        treemacs-user-header-line-format '(:eval (gm/treemacs-header-line)))
   :config
-  (add-to-list 'treemacs-ignored-file-predicates #'gm/treemacs-ignore-runtime-p))
+  (add-to-list 'treemacs-ignored-file-predicates #'gm/treemacs-ignore-runtime-p)
+  (add-hook 'treemacs-mode-hook #'gm/treemacs-setup-buffer)
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'treemacs-mode)
+        (gm/treemacs-setup-buffer))))
+  (treemacs-follow-mode 1)
+  (define-key treemacs-mode-map (kbd "^") #'gm/treemacs-root-up)
+  (define-key treemacs-mode-map (kbd "~") #'gm/treemacs-show-home)
+  (define-key treemacs-mode-map (kbd ".") #'gm/treemacs-reveal-current-file))
 (use-package treemacs-projectile :after (treemacs projectile))
 
 (use-package deadgrep :commands deadgrep)
@@ -170,9 +191,12 @@
 (use-package lsp-metals
   :after lsp-mode
   :init
-  (setq lsp-metals-server-command
-        (list (expand-file-name "bin/metals-java17"
-                                (or (bound-and-true-p gm/config-root) user-emacs-directory)))))
+  (setq lsp-metals-server-command (gm/metals-server-command)
+        lsp-metals-java-home (or (gm/java-home 17) ""))
+  :config
+  (lsp-dependency 'metals
+                  `(:system ,lsp-metals-server-command)
+                  `(:system ,lsp-metals-metals-store-path)))
 
 (use-package lsp-pyright
   :after lsp-mode

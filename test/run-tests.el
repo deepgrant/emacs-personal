@@ -41,6 +41,12 @@
     (when (gm/java-home 21)
       (should (seq-some (lambda (runtime) (plist-get runtime :default)) runtimes)))))
 
+(ert-deftest gm-metals-command-is-an-executable-path-not-a-list ()
+  (let ((command (gm/metals-server-command)))
+    (should (stringp command))
+    (should (file-executable-p command))
+    (should (string-suffix-p "/bin/metals-java17" command))))
+
 (ert-deftest gm-language-file-associations ()
   (gm/languages-initialize)
   (should (eq (cdr (assoc "\\.ts\\'" auto-mode-alist)) 'typescript-ts-mode))
@@ -51,6 +57,14 @@
   (should (eq (key-binding (kbd "s-p")) #'gm/project-find-file))
   (should (eq (key-binding (kbd "s-b")) #'gm/toggle-explorer))
   (should (eq (key-binding (kbd "s-j")) #'gm/toggle-terminal)))
+
+(ert-deftest gm-explorer-home-and-navigation-controls ()
+  (should (equal (gm/treemacs-home-directory)
+                 (directory-file-name (file-truename (expand-file-name "~/")))))
+  (let ((header (gm/treemacs-header-line)))
+    (should (string-match-p "Parent" header))
+    (should (string-match-p "Home" header))
+    (should (get-text-property 1 'local-map header))))
 
 (ert-deftest gm-line-numbers-match-vscodium-default ()
   (gm/core-initialize)

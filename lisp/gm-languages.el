@@ -31,7 +31,11 @@
       (treesit-install-language-grammar (car entry)))))
 
 (defun gm/lsp-deferred-if-available ()
-  "Start LSP when the package is installed."
+  "Load the major mode's external client, then start LSP when available."
+  (pcase major-mode
+    ((or 'scala-mode 'scala-ts-mode) (require 'lsp-metals nil t))
+    ((or 'java-mode 'java-ts-mode) (require 'lsp-java nil t))
+    ((or 'python-mode 'python-ts-mode) (require 'lsp-pyright nil t)))
   (when (fboundp 'lsp-deferred) (lsp-deferred)))
 
 (defun gm/format-buffer ()

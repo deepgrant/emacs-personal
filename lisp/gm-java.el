@@ -18,6 +18,11 @@
 (defvar gm/java-project-versions (make-hash-table :test #'equal)
   "Session-local Java version overrides keyed by project root.")
 
+(defun gm/metals-server-command ()
+  "Return the managed Metals wrapper as a single executable path."
+  (expand-file-name "bin/metals-java17"
+                    (or (bound-and-true-p gm/config-root) user-emacs-directory)))
+
 (defun gm/java--home-matches-p (home version)
   "Return non-nil when HOME contains an executable Java VERSION."
   (let ((java (expand-file-name "bin/java" home)))

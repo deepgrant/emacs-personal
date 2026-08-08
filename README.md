@@ -66,9 +66,13 @@ Within Emacs:
 
 ## Layout and shortcuts
 
-Treemacs occupies the left sidebar, native tabs sit above editor windows, and
-vterm, builds, tests, and diagnostics share a bottom panel. Project search uses a
-persistent ripgrep results panel.
+Treemacs occupies the left sidebar, starts at `$HOME`, and automatically reveals
+the file selected in an editor window. Its clickable header provides **Parent**,
+**Home**, **Reveal**, and **Refresh** controls. From the keyboard, `^` moves the
+root to its parent, `~` returns to `$HOME`, `.` reveals the active file, and `g`
+refreshes the tree. Native tabs sit above editor windows; vterm, builds, tests,
+and diagnostics share a bottom panel. Project search uses a persistent ripgrep
+results panel.
 
 | Shortcut | Action |
 |---|---|
