@@ -17,6 +17,7 @@
 (defvar lsp-completion-provider)
 (defvar lsp-metals-java-home)
 (defvar lsp-metals-metals-store-path)
+(defvar lsp-metals-multi-root)
 (defvar lsp-metals-server-command)
 (defvar treemacs-mode-map)
 (defvar treemacs-user-header-line-format)
@@ -64,6 +65,48 @@
     sbt-mode scala-mode swift-mode treemacs treemacs-projectile vertico vterm web-mode
     which-key yaml-mode yasnippet yasnippet-snippets)
   "Packages that make up the supported editor environment.")
+
+(defconst gm/metals-interactive-commands
+  '(lsp-metals-analyze-stacktrace
+    lsp-metals-bsp-switch
+    lsp-metals-build-connect
+    lsp-metals-build-import
+    lsp-metals-cancel-compilation
+    lsp-metals-cascade-compile
+    lsp-metals-clean-compile
+    lsp-metals-copy-worksheet-output
+    lsp-metals-doctor-run
+    lsp-metals-generate-bsp-config
+    lsp-metals-goto-super-method
+    lsp-metals-new-scala-file
+    lsp-metals-new-scala-project
+    lsp-metals-open-server-log
+    lsp-metals-reset-choice
+    lsp-metals-reset-workspace
+    lsp-metals-restart-build-server
+    lsp-metals-run-scalafix
+    lsp-metals-sources-scan
+    lsp-metals-super-method-hierarchy
+    lsp-metals-view-javap
+    lsp-metals-view-javap-verbose
+    lsp-metals-view-semanticdb-compact
+    lsp-metals-view-semanticdb-detailed
+    lsp-metals-view-tasty-decoded
+    lsp-metals-zip-reports)
+  "Interactive Metals commands exposed before the deferred client loads.")
+
+;; Set these before installing command autoloads.  Invoking an autoloaded
+;; Metals command from the command palette loads and registers the client
+;; immediately, before use-package's deferred :init form has another chance to
+;; run.  In particular, the upstream default enables a multi-root client and
+;; can make a file from one checkout reuse an unrelated repository's server.
+(setq lsp-metals-server-command (gm/metals-server-command)
+      lsp-metals-java-home (or (gm/java-home 17) "")
+      lsp-metals-multi-root nil)
+
+(dolist (command gm/metals-interactive-commands)
+  (unless (fboundp command)
+    (autoload command "lsp-metals" nil t)))
 
 (use-package vertico
   :init (vertico-mode 1))
@@ -190,9 +233,6 @@
 
 (use-package lsp-metals
   :after lsp-mode
-  :init
-  (setq lsp-metals-server-command (gm/metals-server-command)
-        lsp-metals-java-home (or (gm/java-home 17) ""))
   :config
   (lsp-dependency 'metals
                   `(:system ,lsp-metals-server-command)

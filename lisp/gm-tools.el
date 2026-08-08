@@ -31,20 +31,6 @@
         (vterm name)))
      (t (user-error "vterm is not installed; run bin/bootstrap-macos")))))
 
-(defun gm/codex ()
-  "Launch Codex CLI in a project-scoped vterm."
-  (interactive)
-  (unless (executable-find "codex")
-    (user-error "Codex CLI is not available on PATH"))
-  (unless (fboundp 'vterm)
-    (user-error "vterm is not installed"))
-  (let* ((default-directory (gm/project-root))
-         (name (format "*codex:%s*" (file-name-nondirectory
-                                      (directory-file-name default-directory)))))
-    (vterm name)
-    (vterm-send-string "codex")
-    (vterm-send-return)))
-
 (defun gm/health--line (label ok detail)
   "Print one health check LABEL with OK and DETAIL."
   (princ (format "%-24s %s  %s\n" label (if ok "OK " "FAIL") detail)))
@@ -73,7 +59,10 @@
                        "yaml-language-server" "sourcekit-lsp" "gradle" "groovy"
                        "shellcheck" "shfmt" "ruff" "metals" "codex"))
       (gm/health--line program (executable-find program)
-                       (or (executable-find program) "missing")))))
+                       (or (executable-find program) "missing")))
+    (when (fboundp 'gm/codex-capabilities)
+      (pcase-let ((`(,ok . ,detail) (gm/codex-capabilities)))
+        (gm/health--line "Codex native API" ok detail)))))
 
 (defun gm/tools-initialize ()
   "Expose managed tools and start the Emacs server."

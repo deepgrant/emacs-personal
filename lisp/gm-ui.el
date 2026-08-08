@@ -51,6 +51,12 @@
    '("\\*deadgrep.*\\*"
      (display-buffer-reuse-window display-buffer-in-side-window)
      (side . left) (slot . 1) (window-width . 0.28)
+     (window-parameters . ((no-delete-other-windows . t)))))
+  (add-to-list
+   'display-buffer-alist
+   '("\\*Codex:.*\\*"
+     (display-buffer-reuse-window display-buffer-in-side-window)
+     (side . right) (slot . 0) (window-width . 0.32)
      (window-parameters . ((no-delete-other-windows . t))))))
 
 (provide 'gm-ui)

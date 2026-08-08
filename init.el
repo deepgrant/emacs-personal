@@ -15,6 +15,7 @@
 (require 'gm-ui)
 (require 'gm-languages)
 (require 'gm-tools)
+(require 'gm-codex)
 (require 'gm-project)
 
 (gm/java-initialize)
@@ -23,6 +24,7 @@
 (gm/project-initialize)
 (gm/languages-initialize)
 (gm/tools-initialize)
+(gm/codex-initialize)
 
 (provide 'init)
 ;;; init.el ends here
