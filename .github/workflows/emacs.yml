@@ -1,0 +1,24 @@
+name: Emacs
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: purcell/setup-emacs@master
+        with:
+          version: "30.2"
+      - name: Run ERT tests
+        env:
+          GM_EMACS_SKIP_PACKAGES: "1"
+        run: emacs --batch -Q -l test/run-tests.el
+      - name: Byte-compile local modules
+        run: >-
+          emacs --batch -Q
+          --eval "(progn (setq byte-compile-error-on-warn nil)
+          (add-to-list 'load-path (expand-file-name \"lisp\" default-directory))
+          (byte-recompile-directory (expand-file-name \"lisp\" default-directory) 0 t))"

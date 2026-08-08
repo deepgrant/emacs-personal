@@ -15,3 +15,23 @@ dist/
 
 # Undo-tree save-files
 *.~undo-tree
+
+# Runtime state and downloaded dependencies
+elpa/
+eln-cache/
+native-lisp/
+tree-sitter/
+var/
+.local/
+tools/node_modules/
+
+# Language servers and workspace state
+.lsp-session-v1
+.dap-breakpoints
+.metals/
+.bloop/
+.ammonite/
+
+# macOS and editor state
+.DS_Store
+.#*

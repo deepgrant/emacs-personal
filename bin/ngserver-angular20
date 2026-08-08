@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+angular_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+angular_node="/opt/homebrew/opt/node@24/bin/node"
+angular_modules="${angular_repo_root}/tools/node_modules"
+angular_server="${angular_modules}/@angular/language-server/index.js"
+
+if [[ ! -x "${angular_node}" ]]; then
+  echo "Node 24 is missing at ${angular_node}" >&2
+  exit 1
+fi
+if [[ ! -f "${angular_server}" ]]; then
+  echo "Angular Language Server is missing; run bin/bootstrap-macos" >&2
+  exit 1
+fi
+
+exec "${angular_node}" "${angular_server}" \
+  --stdio \
+  --tsProbeLocations "${angular_modules}" \
+  --ngProbeLocations "${angular_modules}" \
+  "$@"

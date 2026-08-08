@@ -1,0 +1,23 @@
+{
+  "name": "gm-emacs-language-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned Node-based language servers used by the Emacs configuration",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "dependencies": {
+    "@angular/language-server": "20.3.x",
+    "@angular/language-service": "20.3.x",
+    "basedpyright": "latest",
+    "bash-language-server": "latest",
+    "prettier": "3.x",
+    "typescript": "5.9.x",
+    "typescript-language-server": "latest",
+    "vscode-langservers-extracted": "latest",
+    "yaml-language-server": "latest"
+  },
+  "overrides": {
+    "minimatch": "10.2.3"
+  }
+}

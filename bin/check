@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+check_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+check_emacs="/opt/homebrew/opt/emacs-plus@30/bin/emacs"
+
+if [[ ! -x "${check_emacs}" ]]; then
+  echo "Emacs Plus 30 is not installed." >&2
+  exit 1
+fi
+
+"${check_emacs}" --batch -Q \
+  -l "${check_repo_root}/test/run-tests.el"
+
+"${check_emacs}" --batch -Q \
+  --eval "(progn (setq byte-compile-error-on-warn nil) (add-to-list 'load-path \"${check_repo_root}/lisp\") (byte-recompile-directory \"${check_repo_root}/lisp\" 0 t))"
+
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck "${check_repo_root}"/bin/*
+fi
+
+echo "All repository checks passed."
