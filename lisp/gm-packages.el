@@ -15,6 +15,8 @@
 (defvar corfu-auto-delay)
 (defvar lsp-clients-angular-language-server-command)
 (defvar lsp-completion-provider)
+(defvar lsp-groovy-classpath)
+(defvar lsp-groovy-server-file)
 (defvar lsp-metals-java-home)
 (defvar lsp-metals-metals-store-path)
 (defvar lsp-metals-multi-root)
@@ -107,6 +109,24 @@
     lsp-metals-view-tasty-decoded
     lsp-metals-zip-reports)
   "Interactive Metals commands exposed before the deferred client loads.")
+
+(defun gm/groovy-language-server-command ()
+  "Return the managed Java 21 Groovy Language Server command."
+  (list (expand-file-name "bin/groovy-language-server-java21"
+                          (or (bound-and-true-p gm/config-root)
+                              user-emacs-directory))))
+
+(setq lsp-groovy-server-file
+      (expand-file-name ".cache/lsp/groovy-language-server-all.jar"
+                        (or (bound-and-true-p gm/config-root)
+                            user-emacs-directory))
+      lsp-groovy-classpath ["/opt/homebrew/opt/groovy/libexec/lib"])
+
+(with-eval-after-load 'lsp-groovy
+  (unless (advice-member-p #'gm/groovy-language-server-command
+                           'lsp-groovy--lsp-command)
+    (advice-add 'lsp-groovy--lsp-command :override
+                #'gm/groovy-language-server-command)))
 
 ;; Set these before installing command autoloads.  Invoking an autoloaded
 ;; Metals command from the command palette loads and registers the client

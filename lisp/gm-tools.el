@@ -51,6 +51,13 @@
     (gm/health--line "GnuTLS" (and (fboundp 'gnutls-available-p) (gnutls-available-p)) "TLS")
     (gm/health--line "vterm native module" (locate-library "vterm-module")
                      (or (locate-library "vterm-module") "missing"))
+    (let ((groovy-ls (expand-file-name ".cache/lsp/groovy-language-server-all.jar"
+                                       (or (bound-and-true-p gm/config-root)
+                                           user-emacs-directory))))
+      (gm/health--line "Groovy Language Server" (file-readable-p groovy-ls)
+                       (if (file-readable-p groovy-ls)
+                           groovy-ls
+                         "run bin/install-groovy-language-server")))
     (dolist (version '(17 18 21))
       (gm/health--line (format "OpenJDK %s" version) (gm/java-home version)
                        (or (gm/java-home version) "missing")))

@@ -60,6 +60,16 @@
   (should (equal lsp-metals-server-command (gm/metals-server-command)))
   (should (equal lsp-metals-java-home (or (gm/java-home 17) ""))))
 
+(ert-deftest gm-groovy-server-uses-managed-jar-java-and-classpath ()
+  (let ((command (gm/groovy-language-server-command)))
+    (should (= (length command) 1))
+    (should (file-executable-p (car command)))
+    (should (string-suffix-p "/bin/groovy-language-server-java21" (car command))))
+  (should (string-suffix-p "/.cache/lsp/groovy-language-server-all.jar"
+                           lsp-groovy-server-file))
+  (should (equal lsp-groovy-classpath
+                 ["/opt/homebrew/opt/groovy/libexec/lib"])))
+
 (ert-deftest gm-minimap-is-a-right-side-on-demand-editor-map ()
   (should (eq (key-binding (kbd "C-c m")) #'minimap-mode))
   (should (eq minimap-window-location 'right))

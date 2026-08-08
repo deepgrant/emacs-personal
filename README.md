@@ -29,6 +29,10 @@ toolchain, Metals 1.6.8, Emacs packages, and Tree-sitter grammars:
 ./bin/bootstrap-macos
 ```
 
+The bootstrap builds the Groovy Language Server from a pinned upstream revision
+because that project does not publish binary releases. To repair or reinstall
+only that server, run `./bin/install-groovy-language-server`.
+
 It deliberately does not alter `/Applications` or `/Library`. After bootstrap,
 register the JDKs and cut over the GUI application:
 
