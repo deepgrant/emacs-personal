@@ -2,6 +2,11 @@
 
 (require 'gm-core)
 (require 'gm-hocon-mode)
+(require 'treesit)
+
+(declare-function apheleia-format-buffer "apheleia")
+(declare-function lsp-deferred "lsp-mode")
+(declare-function lsp-format-buffer "lsp-mode")
 
 (defconst gm/treesit-language-sources
   '((bash "https://github.com/tree-sitter/tree-sitter-bash")

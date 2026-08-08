@@ -3,6 +3,7 @@
 (setq gm/config-root
       (file-name-directory (directory-file-name
                             (file-name-directory (or load-file-name buffer-file-name)))))
+(setq load-prefer-newer t)
 (add-to-list 'load-path (expand-file-name "lisp" gm/config-root))
 (add-to-list 'custom-theme-load-path (expand-file-name "themes" gm/config-root))
 (setenv "GM_EMACS_SKIP_PACKAGES" "1")
@@ -50,6 +51,10 @@
   (should (eq (key-binding (kbd "s-p")) #'gm/project-find-file))
   (should (eq (key-binding (kbd "s-b")) #'gm/toggle-explorer))
   (should (eq (key-binding (kbd "s-j")) #'gm/toggle-terminal)))
+
+(ert-deftest gm-line-numbers-match-vscodium-default ()
+  (gm/core-initialize)
+  (should (eq display-line-numbers-type t)))
 
 (ert-deftest gm-display-panel-rules ()
   (gm/ui-initialize)

@@ -7,12 +7,24 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 cutover_prefix="$(brew --prefix emacs-plus@30 2>/dev/null || true)"
-cutover_binary="${cutover_prefix}/bin/emacs"
+cutover_binary="${cutover_prefix}/Emacs.app/Contents/MacOS/Emacs"
 cutover_source_app="${cutover_prefix}/Emacs.app"
 cutover_source_client="${cutover_prefix}/Emacs Client.app"
 cutover_target_app="/Applications/Emacs.app"
 cutover_target_client="/Applications/Emacs Client.app"
 cutover_plistbuddy="/usr/libexec/PlistBuddy"
+
+cutover_move() {
+  cutover_move_source="$1"
+  cutover_move_target="$2"
+  if ! mv "${cutover_move_source}" "${cutover_move_target}" 2>/dev/null; then
+    osascript \
+      -e 'on run argv' \
+      -e 'do shell script "/bin/mv " & quoted form of item 1 of argv & " " & quoted form of item 2 of argv with administrator privileges' \
+      -e 'end run' \
+      -- "${cutover_move_source}" "${cutover_move_target}"
+  fi
+}
 
 if [[ ! -x "${cutover_binary}" ]]; then
   echo "Emacs Plus 30 is not installed; run bin/bootstrap-macos first." >&2
@@ -47,13 +59,12 @@ brew link emacs-plus@30
 
 cutover_stage_app="/Applications/Emacs-30.2.staged.app"
 cutover_stage_client="/Applications/Emacs-Client-30.2.staged.app"
-if [[ -e "${cutover_stage_app}" || -e "${cutover_stage_client}" ]]; then
-  echo "Refusing cutover: a staged application already exists in /Applications." >&2
-  exit 1
+if [[ ! -e "${cutover_stage_app}" ]]; then
+  ditto "${cutover_source_app}" "${cutover_stage_app}"
 fi
-
-ditto "${cutover_source_app}" "${cutover_stage_app}"
-ditto "${cutover_source_client}" "${cutover_stage_client}"
+if [[ ! -e "${cutover_stage_client}" ]]; then
+  ditto "${cutover_source_client}" "${cutover_stage_client}"
+fi
 cutover_staged_version="$("${cutover_stage_app}/Contents/MacOS/Emacs" --batch -Q --eval '(princ emacs-version)')"
 if [[ "${cutover_staged_version}" != "30.2" ]]; then
   echo "Staged application failed verification; it was left at ${cutover_stage_app}." >&2
@@ -69,20 +80,20 @@ fi
 
 if [[ "${cutover_old_version}" == "26.1" ]]; then
   cutover_backup="${HOME}/.Trash/Emacs-26.1-$(date +%Y%m%d-%H%M%S).app"
-  mv "${cutover_target_app}" "${cutover_backup}"
+  cutover_move "${cutover_target_app}" "${cutover_backup}"
   echo "Moved Emacs 26.1 to ${cutover_backup}"
 elif [[ "${cutover_old_version}" == "30.2" ]]; then
   cutover_backup="${HOME}/.Trash/Emacs-30.2-previous-$(date +%Y%m%d-%H%M%S).app"
-  mv "${cutover_target_app}" "${cutover_backup}"
+  cutover_move "${cutover_target_app}" "${cutover_backup}"
 fi
 
 if [[ -e "${cutover_target_client}" ]]; then
   cutover_client_backup="${HOME}/.Trash/Emacs-Client-previous-$(date +%Y%m%d-%H%M%S).app"
-  mv "${cutover_target_client}" "${cutover_client_backup}"
+  cutover_move "${cutover_target_client}" "${cutover_client_backup}"
 fi
 
-mv "${cutover_stage_app}" "${cutover_target_app}"
-mv "${cutover_stage_client}" "${cutover_target_client}"
+cutover_move "${cutover_stage_app}" "${cutover_target_app}"
+cutover_move "${cutover_stage_client}" "${cutover_target_client}"
 
 cutover_installed_version="$("${cutover_target_app}/Contents/MacOS/Emacs" --batch -Q --eval '(princ emacs-version)')"
 if [[ "${cutover_installed_version}" != "30.2" ]]; then

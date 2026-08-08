@@ -23,7 +23,14 @@ native-lisp/
 tree-sitter/
 var/
 .local/
+.cache/
 tools/node_modules/
+
+# Defensive fallbacks for state written by an older or partial startup
+/history
+/places
+/projectile-frecency.eld
+/recentf
 
 # Language servers and workspace state
 .lsp-session-v1

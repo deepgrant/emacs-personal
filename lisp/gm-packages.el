@@ -3,6 +3,25 @@
 (require 'package)
 (require 'gm-java)
 
+(declare-function global-diff-hl-mode "diff-hl")
+(declare-function diff-hl-flydiff-mode "diff-hl-flydiff")
+
+(defvar corfu-auto-delay)
+(defvar lsp-clients-angular-language-server-command)
+(defvar lsp-completion-provider)
+(defvar use-package-always-defer)
+(defvar use-package-always-ensure)
+(defvar use-package-expand-minimally)
+
+(defconst gm/treemacs-runtime-names
+  '(".cache" ".local" "eln-cache" "elpa" "tree-sitter" "var"
+    "history" "places" "projectile-frecency.eld" "recentf")
+  "Generated configuration entries that Treemacs should not display.")
+
+(defun gm/treemacs-ignore-runtime-p (filename _absolute-path)
+  "Return non-nil when FILENAME is generated runtime state."
+  (member filename gm/treemacs-runtime-names))
+
 (setq package-archives
       '(("gnu" . "https://elpa.gnu.org/packages/")
         ("nongnu" . "https://elpa.nongnu.org/nongnu/")
@@ -91,6 +110,7 @@
   :init
   (setq projectile-cache-file (expand-file-name "projectile.cache" gm/var-directory)
         projectile-known-projects-file (expand-file-name "projectile-bookmarks.eld" gm/var-directory)
+        projectile-frecency-file (expand-file-name "projectile-frecency.eld" gm/var-directory)
         projectile-enable-caching t)
   (projectile-mode 1))
 
@@ -101,14 +121,16 @@
         treemacs-follow-after-init t
         treemacs-is-never-other-window t
         treemacs-show-hidden-files t
-        treemacs-silent-refresh t))
+        treemacs-silent-refresh t)
+  :config
+  (add-to-list 'treemacs-ignored-file-predicates #'gm/treemacs-ignore-runtime-p))
 (use-package treemacs-projectile :after (treemacs projectile))
 
 (use-package deadgrep :commands deadgrep)
 (use-package vterm :commands vterm)
 
 (use-package flycheck
-  :init (global-flycheck-mode 1))
+  :hook (prog-mode . flycheck-mode))
 
 (use-package lsp-mode
   :commands (lsp lsp-deferred lsp-execute-code-action lsp-find-definition lsp-find-references)

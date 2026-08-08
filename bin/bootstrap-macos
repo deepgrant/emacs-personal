@@ -52,10 +52,17 @@ mkdir -p "${bootstrap_repo_root}/.local/bin"
 cs bootstrap org.scalameta:metals_2.13:1.6.8 \
   -o "${bootstrap_repo_root}/.local/bin/metals" -f
 
-bootstrap_emacs="/opt/homebrew/opt/emacs-plus@30/bin/emacs"
+bootstrap_emacs="/opt/homebrew/opt/emacs-plus@30/Emacs.app/Contents/MacOS/Emacs"
 GM_EMACS_SKIP_PACKAGES=0 "${bootstrap_emacs}" --batch -Q \
   -l "${bootstrap_repo_root}/early-init.el" \
   -l "${bootstrap_repo_root}/init.el"
+
+"${bootstrap_emacs}" --batch -Q \
+  --eval "(setq user-emacs-directory \"${bootstrap_repo_root}/\")" \
+  --eval '(require (quote package))' \
+  --eval '(package-initialize)' \
+  --eval '(setq vterm-always-compile-module t)' \
+  --eval '(require (quote vterm))'
 
 "${bootstrap_emacs}" --batch -Q \
   -l "${bootstrap_repo_root}/early-init.el" \

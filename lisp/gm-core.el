@@ -1,6 +1,11 @@
 ;;; gm-core.el --- Core editor behavior -*- lexical-binding: t; -*-
 
 (require 'subr-x)
+(require 'display-line-numbers)
+(require 'project)
+(require 'recentf)
+(require 'savehist)
+(require 'saveplace)
 
 (defgroup gm nil "Personal VSCodium-style Emacs configuration." :group 'environment)
 
@@ -25,6 +30,9 @@
           auto-save-file-name-transforms `((".*" ,auto-save-dir t))))
 
   (setq custom-file (expand-file-name "custom.el" gm/var-directory)
+        savehist-file (expand-file-name "savehist" gm/var-directory)
+        save-place-file (expand-file-name "saveplace" gm/var-directory)
+        recentf-save-file (expand-file-name "recentf" gm/var-directory)
         user-emacs-directory (or (bound-and-true-p gm/config-root) user-emacs-directory)
         create-lockfiles nil
         require-final-newline t
@@ -51,7 +59,7 @@
   (recentf-mode 1)
   (column-number-mode 1)
   (global-display-line-numbers-mode 1)
-  (setq display-line-numbers-type 'relative)
+  (setq display-line-numbers-type t)
 
   (dolist (mode '(term-mode-hook
                   shell-mode-hook

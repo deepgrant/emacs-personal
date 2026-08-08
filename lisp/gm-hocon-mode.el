@@ -32,7 +32,7 @@
     (let ((limit (point)) (depth 0))
       (goto-char (point-min))
       (while (re-search-forward "[][{}]" limit t)
-        (unless (nth 8 (syntax-ppss (match-beginning 0)))
+        (unless (nth 8 (save-excursion (syntax-ppss (match-beginning 0))))
           (setq depth (+ depth (if (member (match-string 0) '("{" "[")) 1 -1)))))
       (max 0 depth))))
 

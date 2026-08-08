@@ -1,6 +1,7 @@
 ;;; gm-ui.el --- Cursor-like visual presentation and window rules -*- lexical-binding: t; -*-
 
 (require 'gm-core)
+(require 'tab-line)
 
 (defun gm/ui-apply-font (&optional frame)
   "Apply the configured font to FRAME when it is available."

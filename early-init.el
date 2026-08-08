@@ -2,7 +2,9 @@
 
 (setq package-enable-at-startup nil
       frame-inhibit-implied-resize t
-      inhibit-startup-screen t)
+      inhibit-startup-screen t
+      load-prefer-newer t
+      native-comp-async-report-warnings-errors 'silent)
 
 (when (fboundp 'tool-bar-mode) (tool-bar-mode -1))
 (when (fboundp 'scroll-bar-mode) (scroll-bar-mode -1))

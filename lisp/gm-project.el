@@ -1,7 +1,16 @@
 ;;; gm-project.el --- Explorer, search, tabs, and shortcuts -*- lexical-binding: t; -*-
 
 (require 'gm-core)
+(require 'gm-tools)
 (require 'seq)
+
+(declare-function consult-imenu "consult")
+(declare-function lsp-execute-code-action "lsp-mode")
+(declare-function lsp-find-definition "lsp-mode")
+(declare-function lsp-find-references "lsp-mode")
+(declare-function treemacs "treemacs")
+(declare-function treemacs-add-and-display-current-project-exclusively "treemacs")
+(declare-function treemacs-quit "treemacs")
 
 (defun gm/project-find-file ()
   "Find a file in the current project."
@@ -18,9 +27,15 @@
     (user-error "Treemacs is not installed; run bin/bootstrap-macos")))
 
 (defun gm/open-explorer ()
-  "Open Treemacs after graphical startup."
-  (when (and (display-graphic-p) (fboundp 'treemacs) (not (window-minibuffer-p)))
-    (treemacs)))
+  "Open Treemacs on the active project, falling back to this repository."
+  (when (and (display-graphic-p)
+             (fboundp 'treemacs-add-and-display-current-project-exclusively)
+             (not (window-minibuffer-p)))
+    (let ((default-directory
+           (or (locate-dominating-file default-directory ".git")
+               (and (bound-and-true-p gm/config-root) gm/config-root)
+               default-directory)))
+      (treemacs-add-and-display-current-project-exclusively))))
 
 (defun gm/project-search-panel ()
   "Open persistent project search and temporarily close the explorer."
@@ -60,8 +75,7 @@
   (global-set-key (kbd "s-2") (lambda () (interactive) (gm/select-editor-window 2)))
   (global-set-key (kbd "s-3") (lambda () (interactive) (gm/select-editor-window 3)))
   (unless noninteractive
-    (add-hook 'emacs-startup-hook
-              (lambda () (run-with-idle-timer 0.4 nil #'gm/open-explorer)))))
+    (add-hook 'emacs-startup-hook #'gm/open-explorer)))
 
 (provide 'gm-project)
 ;;; gm-project.el ends here
