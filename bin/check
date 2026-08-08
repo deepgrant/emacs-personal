@@ -9,6 +9,8 @@ if [[ ! -x "${check_emacs}" ]]; then
   exit 1
 fi
 
+"${check_repo_root}/test/run-install-script-tests"
+
 "${check_emacs}" --batch -Q \
   -l "${check_repo_root}/test/run-tests.el"
 

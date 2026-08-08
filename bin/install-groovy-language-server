@@ -7,8 +7,22 @@ groovy_ls_java_home="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/H
 groovy_ls_install_dir="${groovy_ls_repo_root}/.cache/lsp"
 groovy_ls_jar="${groovy_ls_install_dir}/groovy-language-server-all.jar"
 groovy_ls_revision_file="${groovy_ls_install_dir}/groovy-language-server.revision"
+groovy_ls_dry_run=false
+
+if [[ "$#" -gt 0 ]]; then
+  if [[ "$#" -ne 1 || "$1" != "--dry-run" ]]; then
+    echo "Usage: $0 [--dry-run]" >&2
+    exit 2
+  fi
+  groovy_ls_dry_run=true
+fi
 
 if [[ ! -x "${groovy_ls_java_home}/bin/java" ]]; then
+  if [[ "${groovy_ls_dry_run}" == true ]]; then
+    echo "DRY RUN: OpenJDK 21 is missing; bootstrap would install it before building Groovy Language Server."
+    echo "DRY RUN: no Groovy Language Server files were changed."
+    exit 0
+  fi
   echo "OpenJDK 21 is missing at ${groovy_ls_java_home}" >&2
   exit 1
 fi
@@ -17,7 +31,19 @@ if [[ -f "${groovy_ls_jar}" && -f "${groovy_ls_revision_file}" ]] && \
    [[ "$(tr -d '\n' < "${groovy_ls_revision_file}")" == "${groovy_ls_revision}" ]] && \
    "${groovy_ls_java_home}/bin/jar" tf "${groovy_ls_jar}" | \
      grep -q '^net/prominic/groovyls/GroovyLanguageServer.class$'; then
-  echo "Groovy Language Server ${groovy_ls_revision} is already installed."
+  if [[ "${groovy_ls_dry_run}" == true ]]; then
+    echo "DRY RUN: preserve installed Groovy Language Server ${groovy_ls_revision}."
+    echo "DRY RUN: no Groovy Language Server files were changed."
+  else
+    echo "Groovy Language Server ${groovy_ls_revision} is already installed."
+  fi
+  exit 0
+fi
+
+if [[ "${groovy_ls_dry_run}" == true ]]; then
+  echo "DRY RUN: would fetch Groovy Language Server revision ${groovy_ls_revision}"
+  echo "DRY RUN: would build it with OpenJDK 21 and install ${groovy_ls_jar}"
+  echo "DRY RUN: no Groovy Language Server files were changed."
   exit 0
 fi
 

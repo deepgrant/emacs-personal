@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+install_test_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+install_test_tmp="$(mktemp -d)"
+trap 'rm -rf "${install_test_tmp}"' EXIT
+
+install_test_home="${install_test_tmp}/home"
+install_test_source="${install_test_tmp}/source"
+install_test_baselines="${install_test_tmp}/baselines"
+mkdir -p "${install_test_home}" "${install_test_source}/elpa" "${install_test_source}/var"
+
+for install_test_script in "${install_test_repo_root}"/bin/* \
+                           "${install_test_repo_root}/test/run-install-script-tests"; do
+  bash -n "${install_test_script}"
+done
+
+install_test_old_jdk21="/opt/homebrew/Cellar/openjdk@21/21.0.10/libexec/openjdk.jdk/Contents/Home"
+install_test_stable_jdk21="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+install_test_jdk23="/opt/homebrew/Cellar/openjdk/23.0.2/libexec/openjdk.jdk/Contents/Home"
+printf 'export JAVA_HOME=%s\nexport JDK23_HOME=%s\n' \
+  "${install_test_old_jdk21}" "${install_test_jdk23}" \
+  > "${install_test_home}/.bashrc"
+printf 'export PATH="%s/bin:%s"\n' "${install_test_old_jdk21}" "\$PATH" \
+  > "${install_test_home}/.bash_profile"
+cp "${install_test_home}/.bashrc" "${install_test_tmp}/bashrc.expected"
+cp "${install_test_home}/.bash_profile" "${install_test_tmp}/bash_profile.expected"
+
+install_test_shell_dry_output="$(
+  "${install_test_repo_root}/bin/stabilize-jdk21-shell-paths" \
+    --dry-run --home "${install_test_home}"
+)"
+grep -Fq 'DRY RUN: no shell files were changed.' <<< "${install_test_shell_dry_output}"
+cmp "${install_test_home}/.bashrc" "${install_test_tmp}/bashrc.expected"
+cmp "${install_test_home}/.bash_profile" "${install_test_tmp}/bash_profile.expected"
+if compgen -G "${install_test_home}/*.gm-emacs-*.bak" >/dev/null; then
+  echo "Shell-path dry run created a backup file." >&2
+  exit 1
+fi
+
+"${install_test_repo_root}/bin/stabilize-jdk21-shell-paths" \
+  --home "${install_test_home}" >/dev/null
+
+for install_test_shell_file in .bashrc .bash_profile; do
+  if grep -Fq "${install_test_old_jdk21}" "${install_test_home}/${install_test_shell_file}"; then
+    echo "Cellar-specific JDK 21 path remained in ${install_test_shell_file}." >&2
+    exit 1
+  fi
+  grep -Fq "${install_test_stable_jdk21}" "${install_test_home}/${install_test_shell_file}"
+done
+grep -Fq "${install_test_jdk23}" "${install_test_home}/.bashrc"
+
+shopt -s nullglob
+install_test_bashrc_backups=("${install_test_home}"/.bashrc.gm-emacs-*.bak)
+install_test_profile_backups=("${install_test_home}"/.bash_profile.gm-emacs-*.bak)
+shopt -u nullglob
+[[ "${#install_test_bashrc_backups[@]}" -eq 1 ]]
+[[ "${#install_test_profile_backups[@]}" -eq 1 ]]
+cmp "${install_test_bashrc_backups[0]}" "${install_test_tmp}/bashrc.expected"
+cmp "${install_test_profile_backups[0]}" "${install_test_tmp}/bash_profile.expected"
+
+printf 'package runtime\n' > "${install_test_source}/elpa/example"
+printf 'state runtime\n' > "${install_test_source}/var/example"
+install_test_baseline_dry_output="$(
+  "${install_test_repo_root}/bin/capture-install-baseline" \
+    --dry-run \
+    --source-root "${install_test_source}" \
+    --destination-root "${install_test_baselines}" \
+    --home "${install_test_home}"
+)"
+grep -Fq 'DRY RUN: no baseline files were created.' <<< "${install_test_baseline_dry_output}"
+if [[ -e "${install_test_baselines}" ]]; then
+  echo "Baseline dry run created its destination directory." >&2
+  exit 1
+fi
+install_test_baseline_dir="$(
+  "${install_test_repo_root}/bin/capture-install-baseline" \
+    --source-root "${install_test_source}" \
+    --destination-root "${install_test_baselines}" \
+    --home "${install_test_home}"
+)"
+cmp "${install_test_source}/elpa/example" "${install_test_baseline_dir}/elpa/example"
+cmp "${install_test_source}/var/example" "${install_test_baseline_dir}/var/example"
+cmp "${install_test_home}/.bashrc" "${install_test_baseline_dir}/.bashrc.before"
+test -f "${install_test_baseline_dir}/java-home.txt"
+test -f "${install_test_baseline_dir}/jdk-bundles.txt"
+test -f "${install_test_baseline_dir}/emacs-application.txt"
+
+install_test_groovy_repo="${install_test_tmp}/groovy-repo"
+mkdir -p "${install_test_groovy_repo}/bin"
+cp "${install_test_repo_root}/bin/install-groovy-language-server" \
+  "${install_test_groovy_repo}/bin/install-groovy-language-server"
+install_test_groovy_output="$(
+  "${install_test_groovy_repo}/bin/install-groovy-language-server" --dry-run
+)"
+grep -Fq 'DRY RUN:' <<< "${install_test_groovy_output}"
+if [[ -e "${install_test_groovy_repo}/.cache" ]]; then
+  echo "Groovy Language Server dry run created a cache directory." >&2
+  exit 1
+fi
+
+install_test_bootstrap_output="$(
+  "${install_test_repo_root}/bin/bootstrap-macos" --dry-run
+)"
+grep -Fq 'DRY RUN: no files, packages, applications, taps, or JDK registrations were changed.' \
+  <<< "${install_test_bootstrap_output}"
+
+install_test_registration_output="$(
+  "${install_test_repo_root}/bin/register-jdks-macos" --dry-run 2>&1 || true
+)"
+grep -Fq 'DRY RUN: no privileges were requested and no registrations were changed.' \
+  <<< "${install_test_registration_output}"
+
+install_test_cutover_output="$(
+  "${install_test_repo_root}/bin/cutover-emacs-macos" --dry-run 2>&1 || true
+)"
+grep -Fq 'DRY RUN: no applications, links, processes, or files were changed.' \
+  <<< "${install_test_cutover_output}"
+
+if rg -n 'brew (upgrade|unpin|cleanup|uninstall)' \
+     "${install_test_repo_root}/bin/bootstrap-macos"; then
+  echo "Bootstrap contains a prohibited Homebrew mutation." >&2
+  exit 1
+fi
+grep -Fq 'HOMEBREW_NO_INSTALL_UPGRADE=1' "${install_test_repo_root}/bin/bootstrap-macos"
+grep -Fq 'HOMEBREW_NO_INSTALL_CLEANUP=1' "${install_test_repo_root}/bin/bootstrap-macos"
+grep -Fq 'bundle install --no-upgrade' "${install_test_repo_root}/bin/bootstrap-macos"
+grep -Fq -- '--dry-run' "${install_test_repo_root}/bin/bootstrap-macos"
+grep -Fq '"29.3"' "${install_test_repo_root}/bin/cutover-emacs-macos"
+grep -Fq 'Emacs-29.3-' "${install_test_repo_root}/bin/cutover-emacs-macos"
+grep -Fq 'Refusing to replace non-symlink JDK registration' \
+  "${install_test_repo_root}/bin/register-jdks-macos"
+
+echo "Installation script tests passed."

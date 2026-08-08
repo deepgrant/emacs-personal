@@ -9,6 +9,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Validate installation scripts
+        run: test/run-install-script-tests
       - uses: purcell/setup-emacs@master
         with:
           version: "30.2"

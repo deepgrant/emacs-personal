@@ -22,6 +22,21 @@ completion, diagnostics, actions, and debugger integration.
 
 ## First installation
 
+Preview the complete machine-specific plan before installing anything:
+
+```bash
+./bin/bootstrap-macos --dry-run
+./bin/register-jdks-macos --dry-run
+./bin/cutover-emacs-macos --dry-run
+```
+
+Dry-run mode performs read-only inspection and labels each result as
+`PRESERVE`, `WOULD INSTALL`, `WOULD CREATE`, `WOULD UPDATE`, or `BLOCKED`. It
+does not create the baseline, download dependencies, change shell files, invoke
+Homebrew mutations, request administrator privileges, stop Emacs, or modify
+applications and JDK registrations. This makes the same scripts safe to assess
+on a new personal, work, or CI Mac whose existing Emacs and JDK versions differ.
+
 The bootstrap installs Homebrew dependencies, the Node 24 language-server
 toolchain, Metals 1.6.8, Emacs packages, and Tree-sitter grammars:
 
@@ -29,9 +44,29 @@ toolchain, Metals 1.6.8, Emacs packages, and Tree-sitter grammars:
 ./bin/bootstrap-macos
 ```
 
+Before changing the machine, bootstrap writes a timestamped baseline under
+`~/.local/state/gm-emacs/baselines/`. It records the current Emacs application,
+all Homebrew formula and JDK versions, registered JDK paths, and copies the
+ignored `elpa/` and `var/` runtime directories. Existing Homebrew packages and
+JDKs are preserved: bootstrap disables upgrades, dependent repairs, and cleanup,
+then installs only missing `Brewfile` entries. OpenJDK 17 and 21 are installed
+only when absent; any generic or additional JDK remains untouched.
+
 The bootstrap builds the Groovy Language Server from a pinned upstream revision
 because that project does not publish binary releases. To repair or reinstall
-only that server, run `./bin/install-groovy-language-server`.
+only that server, run `./bin/install-groovy-language-server`. Its proposed build
+can be inspected independently with
+`./bin/install-groovy-language-server --dry-run`.
+
+If `.bashrc` or `.bash_profile` contains a Cellar-version-specific OpenJDK 21
+path, bootstrap replaces only that path with the stable
+`/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` symlink. Each
+changed file receives a timestamped adjacent backup first. Other JDK paths are
+not modified.
+
+The baseline and shell-path stages can also be previewed independently with
+`./bin/capture-install-baseline --dry-run` and
+`./bin/stabilize-jdk21-shell-paths --dry-run`.
 
 It deliberately does not alter `/Applications` or `/Library`. After bootstrap,
 register the JDKs and cut over the GUI application:
@@ -44,15 +79,18 @@ register the JDKs and cut over the GUI application:
 
 The JDK registration command uses `sudo` only for three explicit symlinks under
 `/Library/Java/JavaVirtualMachines`. The cutover command accepts only a verified
-Emacs Plus 30.2 build and a known Emacs 26.1 or 30.2 destination. It stages and
-validates the new app before moving the previous app to the Trash.
+Emacs Plus 30.2 build and a known Emacs 26.1, 29.3, or 30.2 destination. It
+stages and validates the new app before moving the previous app to the Trash.
 
 ### Rollback
 
 If the new application must be rolled back, quit Emacs, move
 `/Applications/Emacs.app` aside, and restore the timestamped Emacs 26.1 bundle
-from `~/.Trash`. Runtime caches under `elpa/`, `tree-sitter/`, `var/`, `.local/`,
+or Emacs 29.3 bundle from `~/.Trash`. The prior Homebrew formula is not
+uninstalled. Runtime caches under `elpa/`, `tree-sitter/`, `var/`, `.local/`,
 and `tools/node_modules/` can be discarded and rebuilt; none are tracked by Git.
+The pre-install copies of `elpa/` and `var/` are also available from the baseline
+directory printed by bootstrap.
 
 ## Java policy
 
@@ -68,6 +106,10 @@ absent, it installs the official OpenJDK 18.0.2+9 archive after SHA-256
 verification. This separation allows current Homebrew tools to use their
 supported JDK without replacing Java 18. Java 18 is never the language-server
 default.
+
+The bootstrap never upgrades or unpins an installed JDK. This allows machines
+with older patch releases or additional JDKs to retain them while adding only
+missing managed Java 17 and Java 21 runtimes.
 
 Within Emacs:
 
