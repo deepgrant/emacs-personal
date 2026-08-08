@@ -44,6 +44,8 @@ brew trust coursier/formulas
 brew bundle --file "${bootstrap_repo_root}/Brewfile"
 brew upgrade openjdk@17 openjdk@21 || true
 
+"${bootstrap_repo_root}/bin/install-groovy-language-server"
+
 bootstrap_node_bin="/opt/homebrew/opt/node@24/bin"
 PATH="${bootstrap_node_bin}:${PATH}" \
   "${bootstrap_node_bin}/npm" ci --prefix "${bootstrap_repo_root}/tools"

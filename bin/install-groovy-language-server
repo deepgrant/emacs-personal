@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+groovy_ls_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+groovy_ls_revision="347d098a928707223ce44b52cc45174a6327a5f3"
+groovy_ls_java_home="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+groovy_ls_install_dir="${groovy_ls_repo_root}/.cache/lsp"
+groovy_ls_jar="${groovy_ls_install_dir}/groovy-language-server-all.jar"
+groovy_ls_revision_file="${groovy_ls_install_dir}/groovy-language-server.revision"
+
+if [[ ! -x "${groovy_ls_java_home}/bin/java" ]]; then
+  echo "OpenJDK 21 is missing at ${groovy_ls_java_home}" >&2
+  exit 1
+fi
+
+if [[ -f "${groovy_ls_jar}" && -f "${groovy_ls_revision_file}" ]] && \
+   [[ "$(tr -d '\n' < "${groovy_ls_revision_file}")" == "${groovy_ls_revision}" ]] && \
+   "${groovy_ls_java_home}/bin/jar" tf "${groovy_ls_jar}" | \
+     grep -q '^net/prominic/groovyls/GroovyLanguageServer.class$'; then
+  echo "Groovy Language Server ${groovy_ls_revision} is already installed."
+  exit 0
+fi
+
+groovy_ls_tmp="$(mktemp -d)"
+trap 'rm -rf "${groovy_ls_tmp}"' EXIT
+
+git -C "${groovy_ls_tmp}" init --quiet
+git -C "${groovy_ls_tmp}" remote add origin \
+  https://github.com/GroovyLanguageServer/groovy-language-server.git
+git -C "${groovy_ls_tmp}" fetch --quiet --depth 1 origin "${groovy_ls_revision}"
+git -C "${groovy_ls_tmp}" checkout --quiet --detach FETCH_HEAD
+
+(
+  cd "${groovy_ls_tmp}"
+  JAVA_HOME="${groovy_ls_java_home}" \
+  PATH="${groovy_ls_java_home}/bin:${PATH}" \
+    ./gradlew --no-daemon --console=plain shadowJar
+)
+
+shopt -s nullglob
+groovy_ls_artifacts=("${groovy_ls_tmp}"/build/libs/*-all.jar)
+shopt -u nullglob
+if [[ "${#groovy_ls_artifacts[@]}" -ne 1 ]]; then
+  echo "Groovy Language Server build did not produce exactly one shaded JAR." >&2
+  exit 1
+fi
+groovy_ls_built_jar="${groovy_ls_artifacts[0]}"
+if ! "${groovy_ls_java_home}/bin/jar" tf "${groovy_ls_built_jar}" | \
+     grep -q '^net/prominic/groovyls/GroovyLanguageServer.class$'; then
+  echo "Groovy Language Server artifact failed validation." >&2
+  exit 1
+fi
+
+mkdir -p "${groovy_ls_install_dir}"
+install -m 0644 "${groovy_ls_built_jar}" "${groovy_ls_jar}"
+printf '%s\n' "${groovy_ls_revision}" > "${groovy_ls_revision_file}"
+echo "Installed Groovy Language Server at ${groovy_ls_jar}."
