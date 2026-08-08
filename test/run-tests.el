@@ -60,6 +60,13 @@
   (should (equal lsp-metals-server-command (gm/metals-server-command)))
   (should (equal lsp-metals-java-home (or (gm/java-home 17) ""))))
 
+(ert-deftest gm-minimap-is-a-right-side-on-demand-editor-map ()
+  (should (eq (key-binding (kbd "C-c m")) #'minimap-mode))
+  (should (eq minimap-window-location 'right))
+  (should (= minimap-width-fraction 0.12))
+  (should (member 'prog-mode minimap-major-modes))
+  (should minimap-hide-fringes))
+
 (ert-deftest gm-language-file-associations ()
   (gm/languages-initialize)
   (should (eq (cdr (assoc "\\.ts\\'" auto-mode-alist)) 'typescript-ts-mode))

@@ -6,6 +6,13 @@ terminal panels, language servers, debugging, Git tooling, and hybrid macOS/Emac
 keybindings. A native Codex task panel gives project-scoped coding agents direct,
 sandboxed access to the active Git workspace.
 
+## Screen layout
+
+![GNU Emacs workstation with the home-directory explorer, Scala editor, tabs, Git status, and code minimap](docs/images/emacs-workstation-layout.png)
+
+The VSCodium-style workspace combines the `$HOME` explorer, editor tabs, LSP
+status, Git integration, and an optional right-side code minimap.
+
 ## Supported languages
 
 Scala, Python, TypeScript/TSX, Angular 20, Java, Groovy, Gradle, Bash, YAML,
@@ -73,7 +80,9 @@ the file selected in an editor window. Its clickable header provides **Parent**,
 root to its parent, `~` returns to `$HOME`, `.` reveals the active file, and `g`
 refreshes the tree. Native tabs sit above editor windows; vterm, builds, tests,
 and diagnostics share a bottom panel. Project search uses a persistent ripgrep
-results panel.
+results panel. An optional code minimap opens on the right edge of the active
+editor and supports mouse navigation; it remains off until requested so the
+Codex sidebar can retain the full panel width.
 
 | Shortcut | Action |
 |---|---|
@@ -91,6 +100,7 @@ results panel.
 | `Cmd-S` / `Cmd-W` | Save / close buffer |
 | `Cmd-1`, `Cmd-2`, `Cmd-3` | Select editor window |
 | `C-c f` | Explicitly format the current buffer |
+| `C-c m` | Toggle the code minimap |
 
 Native `C-` and `M-` Emacs editing commands remain unchanged.
 

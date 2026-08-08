@@ -19,6 +19,19 @@
 (defvar lsp-metals-metals-store-path)
 (defvar lsp-metals-multi-root)
 (defvar lsp-metals-server-command)
+(defvar minimap-automatically-delete-window)
+(defvar minimap-dedicated-window)
+(defvar minimap-display-semantic-overlays)
+(defvar minimap-enlarge-certain-faces)
+(defvar minimap-hide-fringes)
+(defvar minimap-hide-scroll-bar)
+(defvar minimap-major-modes)
+(defvar minimap-minimum-width)
+(defvar minimap-recenter-type)
+(defvar minimap-recreate-window)
+(defvar minimap-update-delay)
+(defvar minimap-width-fraction)
+(defvar minimap-window-location)
 (defvar treemacs-mode-map)
 (defvar treemacs-user-header-line-format)
 (defvar use-package-always-defer)
@@ -60,7 +73,7 @@
 
 (defconst gm/required-packages
   '(apheleia cape consult consult-lsp corfu dap-mode deadgrep diff-hl doom-modeline
-    embark embark-consult flycheck groovy-mode lsp-java lsp-metals lsp-mode lsp-pyright
+    embark embark-consult flycheck groovy-mode lsp-java lsp-metals lsp-mode lsp-pyright minimap
     lsp-treemacs lsp-ui magit marginalia nerd-icons nerd-icons-dired orderless projectile
     sbt-mode scala-mode swift-mode treemacs treemacs-projectile vertico vterm web-mode
     which-key yaml-mode yasnippet yasnippet-snippets)
@@ -192,6 +205,31 @@
 
 (use-package deadgrep :commands deadgrep)
 (use-package vterm :commands vterm)
+
+(defun gm/minimap-setup-buffer ()
+  "Keep the minimap visually compact and separate from editor chrome."
+  (when (fboundp 'display-line-numbers-mode)
+    (display-line-numbers-mode -1))
+  (setq-local show-trailing-whitespace nil))
+
+(use-package minimap
+  :commands (minimap-mode minimap-create minimap-kill)
+  :bind (("C-c m" . minimap-mode))
+  :init
+  (setq minimap-window-location 'right
+        minimap-width-fraction 0.12
+        minimap-minimum-width 20
+        minimap-update-delay 0.15
+        minimap-recenter-type 'relative
+        minimap-hide-scroll-bar t
+        minimap-hide-fringes t
+        minimap-dedicated-window t
+        minimap-display-semantic-overlays nil
+        minimap-enlarge-certain-faces nil
+        minimap-major-modes '(prog-mode text-mode conf-mode)
+        minimap-recreate-window t
+        minimap-automatically-delete-window 'visible)
+  :hook (minimap-sb-mode . gm/minimap-setup-buffer))
 
 (use-package flycheck
   :hook (prog-mode . flycheck-mode))
