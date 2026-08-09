@@ -14,10 +14,12 @@ fi
 "${check_emacs}" --batch -Q \
   -l "${check_repo_root}/test/run-tests.el"
 
+GM_EMACS="${check_emacs}" "${check_repo_root}/test/run-session-smoke"
+
 GM_EMACS_SKIP_PACKAGES=1 "${check_emacs}" --batch -Q \
   --eval "(setq user-emacs-directory \"${check_repo_root}/\")" \
   --eval "(progn (require 'package) (package-initialize))" \
-  --eval "(progn (setq byte-compile-error-on-warn nil) (add-to-list 'load-path \"${check_repo_root}/lisp\") (byte-recompile-directory \"${check_repo_root}/lisp\" 0 t))"
+  --eval "(progn (setq byte-compile-error-on-warn nil load-prefer-newer t) (add-to-list 'load-path \"${check_repo_root}/lisp\") (byte-recompile-directory \"${check_repo_root}/lisp\" 0 t))"
 
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck "${check_repo_root}"/bin/*

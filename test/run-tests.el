@@ -10,6 +10,7 @@
 
 (require 'ert)
 (require 'gm-core)
+(require 'gm-session)
 (require 'gm-java)
 (require 'gm-hocon-mode)
 (require 'gm-ui)
@@ -18,6 +19,26 @@
 (require 'gm-packages)
 (require 'gm-project)
 (require 'gm-languages)
+
+(defun gm-test-git-init (directory)
+  "Create and return a Git repository at DIRECTORY."
+  (make-directory directory t)
+  (should (zerop (process-file "git" nil nil nil "init" "--quiet" directory)))
+  (file-name-as-directory (file-truename directory)))
+
+(defmacro gm-test-with-workspace-tabs (&rest body)
+  "Run BODY with an isolated tab-bar workspace list."
+  (declare (indent 0) (debug t))
+  `(let ((saved-tabs (copy-tree (tab-bar-tabs)))
+         (gm/workspace-routing-enabled nil)
+         (gm/workspace--routing nil))
+     (unwind-protect
+         (progn
+           (set-frame-parameter nil 'tabs nil)
+           (tab-bar-tabs)
+           (gm/workspace--ensure-global-tab)
+           ,@body)
+       (tab-bar-tabs-set saved-tabs))))
 
 (ert-deftest gm-theme-loads ()
   (load-theme 'gm-cursor-dark t)
@@ -88,9 +109,14 @@
   (should (eq (key-binding (kbd "s-p")) #'gm/project-find-file))
   (should (eq (key-binding (kbd "s-b")) #'gm/toggle-explorer))
   (should (eq (key-binding (kbd "s-j")) #'gm/toggle-terminal))
+  (should (eq (key-binding (kbd "s-{")) #'tab-bar-switch-to-prev-tab))
+  (should (eq (key-binding (kbd "s-}")) #'tab-bar-switch-to-next-tab))
   (should (eq (key-binding (kbd "s-i")) #'gm/codex-task))
   (should (eq (key-binding (kbd "s-I")) #'gm/codex-toggle))
-  (should (keymapp (key-binding (kbd "C-c a")))))
+  (should (keymapp (key-binding (kbd "C-c a"))))
+  (should (keymapp (key-binding (kbd "C-c w"))))
+  (should (eq (key-binding (kbd "C-c w o")) #'gm/workspace-open))
+  (should (eq (key-binding (kbd "C-c w S")) #'gm/session-save-now)))
 
 (ert-deftest gm-explorer-home-and-navigation-controls ()
   (should (equal (gm/treemacs-home-directory)
@@ -99,6 +125,326 @@
     (should (string-match-p "Parent" header))
     (should (string-match-p "Home" header))
     (should (get-text-property 1 'local-map header))))
+
+(ert-deftest gm-explorer-does-not-initialize-inside-desktop-restoration ()
+  (let ((gm/workspace--suppress-explorer-sync t))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _display) (error "Treemacs was reached"))))
+      (should-not (gm/workspace-sync-explorer)))))
+
+(ert-deftest gm-explorer-renders-before-enabling-file-follow ()
+  (let ((gm/workspace--suppress-explorer-sync nil)
+        (treemacs-follow-after-init t)
+        (treemacs-follow-mode t)
+        rendered-root
+        calls)
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+              ((symbol-function 'require) (lambda (&rest _) t))
+              ((symbol-function 'gm/workspace-explorer-root)
+               (lambda () temporary-file-directory))
+              ((symbol-function 'gm/workspace-explorer-name) (lambda () "tmp"))
+              ((symbol-function 'treemacs--show-single-project)
+               (lambda (root _name)
+                 (setq rendered-root root)
+                 (push (list 'render
+                             (symbol-value 'treemacs-follow-after-init)
+                             (symbol-value 'treemacs-follow-mode))
+                       calls)))
+              ((symbol-function 'treemacs-follow-mode)
+               (lambda (argument)
+                 (set 'treemacs-follow-mode (> argument 0))
+                 (push (list 'follow argument) calls))))
+      (gm/workspace-sync-explorer)
+      (should (equal rendered-root
+                     (directory-file-name temporary-file-directory)))
+      (should (equal (nreverse calls)
+                     '((follow -1) (render nil nil) (follow 1)))))))
+
+(ert-deftest gm-explorer-defers-follow-until-root-dom-is-ready ()
+  (let ((called nil)
+        (root-position nil))
+    (cl-letf (((symbol-function 'treemacs--find-project-for-path)
+               (lambda (_) 'project))
+              ((symbol-function 'treemacs-project->path)
+               (lambda (_) "/workspace"))
+              ((symbol-function 'treemacs-find-in-dom)
+               (lambda (_) 'root-node))
+              ((symbol-function 'treemacs-dom-node->position)
+               (lambda (_) root-position)))
+      (should-not
+       (gm/treemacs--find-file-node-when-root-ready
+        (lambda (&rest _) (setq called t)) "/workspace/file"))
+      (should-not called)
+      (setq root-position 1)
+      (should
+       (gm/treemacs--find-file-node-when-root-ready
+        (lambda (&rest _) (setq called t)) "/workspace/file"))
+      (should called))))
+
+(ert-deftest gm-session-restores-only-local-file-buffers ()
+  (should (gm/session-save-buffer-p "/tmp/example" "example" 'text-mode))
+  (should-not (gm/session-save-buffer-p nil "*vterm*" 'vterm-mode))
+  (should-not (gm/session-save-buffer-p "/ssh:host:/tmp/example" "example" 'text-mode)))
+
+(ert-deftest gm-session-uses-ignored-pid-safe-desktop-state ()
+  (let ((gm/session-directory (file-name-as-directory
+                               (make-temp-file "gm-session-state-" t)))
+        (desktop-globals-to-save (copy-sequence desktop-globals-to-save)))
+    (unwind-protect
+        (progn
+          (gm/session-initialize)
+          (should (equal desktop-path (list gm/session-directory)))
+          (should (equal desktop-dirname gm/session-directory))
+          (should (eq desktop-load-locked-desktop 'check-pid))
+          (should (= desktop-auto-save-timeout 60))
+          (should desktop-restore-frames)
+          (should (eq desktop-buffers-not-to-save-function
+                      #'gm/session-save-buffer-p))
+          (should (assq 'lsp-mode desktop-minor-mode-table))
+          (should-not (cadr (assq 'lsp-mode desktop-minor-mode-table)))
+          (should (eq (alist-get 'lsp-mode desktop-minor-mode-handlers)
+                      #'gm/session--ignore-restored-minor-mode))
+          (should (memq 'gm/session-last-file desktop-globals-to-save))
+          (should-not desktop-save-mode))
+      (remove-hook 'buffer-list-update-hook #'gm/session-track-focused-file)
+      (remove-hook 'desktop-after-read-hook #'gm/session--finish-restore)
+      (remove-hook 'desktop-no-desktop-file-hook #'gm/session--initialize-new-desktop)
+      (remove-hook 'desktop-not-loaded-hook #'gm/session--decline-locked-desktop)
+      (delete-directory gm/session-directory t))))
+
+(ert-deftest gm-session-defers-language-processes-until-the-buffer-is-used ()
+  (with-temp-buffer
+    (let ((gm/session-restoring-p t)
+          flycheck-started
+          lsp-started)
+      (gm/lsp-deferred-if-available)
+      (should (memq #'gm/language-services-after-session-command
+                    post-command-hook))
+      (setq gm/session-restoring-p nil)
+      (cl-letf (((symbol-function 'flycheck-mode)
+                 (lambda (&optional _argument) (setq flycheck-started t)))
+                ((symbol-function 'gm/lsp-start-for-current-buffer)
+                 (lambda () (setq lsp-started t))))
+        (gm/language-services-after-session-command))
+      (should flycheck-started)
+      (should lsp-started)
+      (should-not (memq #'gm/language-services-after-session-command
+                        post-command-hook)))))
+
+(ert-deftest gm-session-discards-generated-window-state-safely ()
+  (let ((file (make-temp-file "gm-session-window-state-"))
+        file-buffer generated-buffer)
+    (unwind-protect
+        (save-window-excursion
+          (setq file-buffer (find-file-noselect file)
+                generated-buffer (get-buffer-create " *gm-session-generated*"))
+          (switch-to-buffer file-buffer)
+          (display-buffer-in-side-window
+           generated-buffer '((side . left) (slot . 0)))
+          (let ((state (window-state-get (frame-root-window) 'writable)))
+            (should-not (gm/session--safe-window-state-node-p state))
+            (let ((safe (gm/session-sanitize-window-state state)))
+              (should (gm/session--safe-window-state-node-p safe))
+              (should-not (string-match-p "gm-session-generated"
+                                          (prin1-to-string safe))))))
+      (when (buffer-live-p file-buffer) (kill-buffer file-buffer))
+      (when (buffer-live-p generated-buffer) (kill-buffer generated-buffer))
+      (delete-file file))))
+
+(ert-deftest gm-session-secondary-instance-cannot-save-the-primary-desktop ()
+  (let ((desktop-save-mode t)
+        (gm/session-restored-p nil)
+        (gm/session-after-restore-hook nil))
+    (gm/session--decline-locked-desktop)
+    (should-not desktop-save-mode)
+    (should gm/session-restored-p)))
+
+(ert-deftest gm-session-focuses-the-last-surviving-file ()
+  (let* ((file (make-temp-file "gm-session-last-"))
+         (buffer (find-file-noselect file))
+         (gm/session-last-file file))
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer "*scratch*")
+          (gm/session-focus-last-file)
+          (should (eq (current-buffer) buffer)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-file file))))
+
+(ert-deftest gm-workspace-resolves-nested-repositories-and-worktrees ()
+  (let* ((root (make-temp-file "gm-workspace-git-" t))
+         (main (gm-test-git-init (expand-file-name "main" root)))
+         (nested (gm-test-git-init (expand-file-name "nested" main)))
+         (worktree (expand-file-name "worktree" root)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "tracked" main) (insert "tracked\n"))
+          (should (zerop (process-file "git" nil nil nil "-C" main "add" "tracked")))
+          (should (zerop (process-file "git" nil nil nil "-C" main
+                                       "-c" "user.name=Emacs Test"
+                                       "-c" "user.email=emacs@example.invalid"
+                                       "commit" "--quiet" "-m" "initial")))
+          (should (zerop (process-file "git" nil nil nil "-C" main
+                                       "worktree" "add" "--quiet" "-b"
+                                       "gm-test-worktree" worktree)))
+          (should (equal (gm/workspace-git-root (expand-file-name "tracked" main)) main))
+          (should (equal (gm/workspace-git-root nested) nested))
+          (should (equal (gm/workspace-git-root worktree)
+                         (file-name-as-directory (file-truename worktree)))))
+      (delete-directory root t))))
+
+(ert-deftest gm-workspace-creates-reuses-and-closes-repository-tabs ()
+  (let* ((root (make-temp-file "gm-workspace-tabs-" t))
+         (repo-a (gm-test-git-init (expand-file-name "one/shared" root)))
+         (repo-b (gm-test-git-init (expand-file-name "two/shared" root)))
+         (file-a (expand-file-name "a.txt" repo-a))
+         buffer-a)
+    (unwind-protect
+        (gm-test-with-workspace-tabs
+          (gm/workspace-open repo-a)
+          (should (equal (gm/workspace-current-root) repo-a))
+          (should (= (length (gm/workspace--tabs)) 2))
+          (gm/workspace-open repo-a)
+          (should (= (length (gm/workspace--tabs)) 2))
+          (gm/workspace-open repo-b)
+          (should (= (length (gm/workspace--tabs)) 3))
+          (let ((names (mapcar (lambda (tab) (alist-get 'name tab))
+                               (seq-filter
+                                (lambda (tab)
+                                  (eq (gm/workspace--tab-kind tab) 'repository))
+                                (gm/workspace--tabs)))))
+            (should (seq-every-p (lambda (name) (string-match-p "shared (" name)) names)))
+          (with-temp-file file-a (insert "a\n"))
+          (setq buffer-a (find-file-noselect file-a))
+          (gm/workspace-close)
+          (should (buffer-live-p buffer-a))
+          (should (= (length (gm/workspace--registered-roots)) 1))
+          (gm/workspace-global)
+          (should-error (gm/workspace-close) :type 'user-error)
+          (should (gm/workspace--prevent-global-close
+                   (gm/workspace--current-tab) nil)))
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+      (delete-directory root t))))
+
+(ert-deftest gm-workspace-routes-only-displayed-files ()
+  (let* ((root (make-temp-file "gm-workspace-route-" t))
+         (repo (gm-test-git-init (expand-file-name "repo" root)))
+         (repo-file (expand-file-name "repo.txt" repo))
+         (loose-file (expand-file-name "loose.txt" root))
+         repo-buffer loose-buffer)
+    (with-temp-file repo-file (insert "repo\n"))
+    (with-temp-file loose-file (insert "loose\n"))
+    (unwind-protect
+        (gm-test-with-workspace-tabs
+          (gm/workspace-open repo)
+          (gm/workspace-global)
+          (setq repo-buffer (find-file-noselect repo-file))
+          (let ((gm/workspace-routing-enabled t))
+            (set-window-buffer (selected-window) repo-buffer)
+            (with-current-buffer repo-buffer (gm/workspace-route-selected-file))
+            (should (equal (gm/workspace-current-root) repo))
+            (setq loose-buffer (find-file-noselect loose-file))
+            (should (equal (gm/workspace-current-root) repo))
+            (set-window-buffer (selected-window) loose-buffer)
+            (with-current-buffer loose-buffer (gm/workspace-route-selected-file))
+            (should-not (gm/workspace-current-root))))
+      (when (buffer-live-p repo-buffer) (kill-buffer repo-buffer))
+      (when (buffer-live-p loose-buffer) (kill-buffer loose-buffer))
+      (delete-directory root t))))
+
+(ert-deftest gm-workspace-can-return-from-global-by-selecting-its-tab ()
+  (let* ((root (make-temp-file "gm-workspace-return-" t))
+         (repo (gm-test-git-init (expand-file-name "repo" root)))
+         (repo-file (expand-file-name "repo.txt" repo))
+         repo-buffer)
+    (with-temp-file repo-file (insert "repo\n"))
+    (unwind-protect
+        (gm-test-with-workspace-tabs
+          (gm/workspace-open repo)
+          (setq repo-buffer (find-file-noselect repo-file))
+          (switch-to-buffer repo-buffer)
+          ;; A special buffer can become the saved editor for the repository;
+          ;; selecting the workspace must still recover its latest file.
+          (switch-to-buffer "*scratch*")
+          (gm/workspace-global)
+          (should-not (gm/workspace-current-root))
+          (tab-bar-select-tab (gm/workspace--repository-tab-index repo))
+          (should (equal (gm/workspace-current-root) repo))
+          (should (eq (current-buffer) repo-buffer)))
+      (when (buffer-live-p repo-buffer) (kill-buffer repo-buffer))
+      (delete-directory root t))))
+
+(ert-deftest gm-workspace-filters-file-tabs-and-project-root ()
+  (let* ((root (make-temp-file "gm-workspace-filter-" t))
+         (repo (gm-test-git-init (expand-file-name "repo" root)))
+         (repo-file (expand-file-name "repo.txt" repo))
+         (loose-file (expand-file-name "loose.txt" root))
+         repo-buffer loose-buffer)
+    (with-temp-file repo-file (insert "repo\n"))
+    (with-temp-file loose-file (insert "loose\n"))
+    (unwind-protect
+        (gm-test-with-workspace-tabs
+          (setq repo-buffer (find-file-noselect repo-file)
+                loose-buffer (find-file-noselect loose-file))
+          (gm/workspace-open repo)
+          (with-current-buffer repo-buffer
+            (should (equal (gm/project-root) repo)))
+          (let ((tabs (with-current-buffer repo-buffer
+                        (gm/workspace-tab-line-buffers))))
+            (should (memq repo-buffer tabs))
+            (should-not (memq loose-buffer tabs)))
+          (should (equal (gm/workspace-explorer-root) repo))
+          (let ((header (gm/treemacs-header-line)))
+            (should (string-match-p "Global" header))
+            (should-not (string-match-p "Parent" header)))
+          (should-error (gm/treemacs-root-up) :type 'user-error)
+          (gm/workspace-global)
+          (should (equal (gm/workspace-explorer-root) (gm/treemacs-home-directory))))
+      (when (buffer-live-p repo-buffer) (kill-buffer repo-buffer))
+      (when (buffer-live-p loose-buffer) (kill-buffer loose-buffer))
+      (delete-directory root t))))
+
+(ert-deftest gm-workspace-metadata-is-printable-in-desktop-tabs ()
+  (let* ((root (make-temp-file "gm-workspace-desktop-" t))
+         (repo (gm-test-git-init (expand-file-name "repo" root))))
+    (unwind-protect
+        (gm-test-with-workspace-tabs
+          (gm/workspace-open repo)
+          (let* ((tabs (gm/workspace--tabs))
+                 (filtered (frameset-filter-tabs tabs nil nil t))
+                 (saved-root
+                  (seq-some (lambda (tab) (alist-get 'gm-workspace-root tab)) filtered)))
+            (should (equal saved-root repo))
+            (should (string-match-p (regexp-quote repo) (prin1-to-string filtered)))))
+      (delete-directory root t))))
+
+(ert-deftest gm-workspace-tools-use-the-tab-root-from-special-buffers ()
+  (let* ((root (make-temp-file "gm-workspace-tools-" t))
+         (repo (gm-test-git-init (expand-file-name "repo" root)))
+         projectile-root magit-root search-root)
+    (unwind-protect
+        (gm-test-with-workspace-tabs
+          (gm/workspace-open repo)
+          (with-temp-buffer
+            (setq default-directory root)
+            (should (equal (gm/project-root) repo))
+            (should (equal (gm/codex--canonical-root) repo))
+            (cl-letf (((symbol-function 'projectile-find-file-in-directory)
+                       (lambda (directory) (setq projectile-root directory)))
+                      ((symbol-function 'magit-status-setup-buffer)
+                       (lambda (directory) (setq magit-root directory)))
+                      ((symbol-function 'deadgrep)
+                       (lambda ()
+                         (interactive)
+                         (setq search-root default-directory)))
+                      ((symbol-function 'treemacs-quit) #'ignore))
+              (gm/project-find-file)
+              (gm/project-status)
+              (gm/project-search-panel))
+            (should (equal projectile-root repo))
+            (should (equal magit-root repo))
+            (should (equal search-root repo))))
+      (delete-directory root t))))
 
 (ert-deftest gm-line-numbers-match-vscodium-default ()
   (gm/core-initialize)

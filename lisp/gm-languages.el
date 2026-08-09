@@ -5,8 +5,11 @@
 (require 'treesit)
 
 (declare-function apheleia-format-buffer "apheleia")
+(declare-function flycheck-mode "flycheck")
 (declare-function lsp-deferred "lsp-mode")
 (declare-function lsp-format-buffer "lsp-mode")
+
+(defvar gm/session-restoring-p)
 
 (defconst gm/treesit-language-sources
   '((bash "https://github.com/tree-sitter/tree-sitter-bash")
@@ -30,13 +33,33 @@
       (message "Installing Tree-sitter grammar: %s" (car entry))
       (treesit-install-language-grammar (car entry)))))
 
-(defun gm/lsp-deferred-if-available ()
-  "Load the major mode's external client, then start LSP when available."
+(defun gm/lsp-start-for-current-buffer ()
+  "Load and start the current buffer's external language client."
   (pcase major-mode
     ((or 'scala-mode 'scala-ts-mode) (require 'lsp-metals nil t))
     ((or 'java-mode 'java-ts-mode) (require 'lsp-java nil t))
     ((or 'python-mode 'python-ts-mode) (require 'lsp-pyright nil t)))
   (when (fboundp 'lsp-deferred) (lsp-deferred)))
+
+(defun gm/language-services-after-session-command ()
+  "Start deferred diagnostics and LSP after using a restored file buffer."
+  (unless (bound-and-true-p gm/session-restoring-p)
+    (remove-hook 'post-command-hook
+                 #'gm/language-services-after-session-command t)
+    (when (fboundp 'flycheck-mode) (flycheck-mode 1))
+    (gm/lsp-start-for-current-buffer)))
+
+(defun gm/lsp-deferred-if-available ()
+  "Start LSP, or defer it until a restored buffer receives input."
+  (if (bound-and-true-p gm/session-restoring-p)
+      (add-hook 'post-command-hook
+                #'gm/language-services-after-session-command nil t)
+    (gm/lsp-start-for-current-buffer)))
+
+(defun gm/flycheck-mode-unless-restoring-session ()
+  "Enable Flycheck except while Desktop is reconstructing file buffers."
+  (unless (bound-and-true-p gm/session-restoring-p)
+    (flycheck-mode 1)))
 
 (defun gm/format-buffer ()
   "Format the current buffer explicitly using configured tooling."

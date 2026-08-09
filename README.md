@@ -10,8 +10,9 @@ sandboxed access to the active Git workspace.
 
 ![GNU Emacs workstation with the home-directory explorer, Scala editor, tabs, Git status, and code minimap](docs/images/emacs-workstation-layout.png)
 
-The VSCodium-style workspace combines the `$HOME` explorer, editor tabs, LSP
-status, Git integration, and an optional right-side code minimap.
+The VSCodium-style workspace combines Git workspace tabs, scoped editor tabs,
+the `$HOME` explorer, LSP status, Git integration, and an optional right-side
+code minimap.
 
 ## Supported languages
 
@@ -120,15 +121,24 @@ Within Emacs:
 
 ## Layout and shortcuts
 
-Treemacs occupies the left sidebar, starts at `$HOME`, and automatically reveals
-the file selected in an editor window. Its clickable header provides **Parent**,
-**Home**, **Reveal**, and **Refresh** controls. From the keyboard, `^` moves the
-root to its parent, `~` returns to `$HOME`, `.` reveals the active file, and `g`
-refreshes the tree. Native tabs sit above editor windows; vterm, builds, tests,
-and diagnostics share a bottom panel. Project search uses a persistent ripgrep
-results panel. An optional code minimap opens on the right edge of the active
-editor and supports mouse navigation; it remains off until requested so the
-Codex sidebar can retain the full panel width.
+The top tab bar contains one workspace per explicitly registered Git worktree
+and one permanent **Global** workspace. Open a repository with
+`M-x gm/workspace-open`; selecting a file from a registered repository routes it
+to that workspace, while loose files and unregistered repositories use Global.
+Closing a repository workspace never kills its buffers.
+
+Treemacs occupies the left sidebar. Repository workspaces expose exactly their
+Git root and cannot navigate into parent directories. Global starts at `$HOME`
+and provides **Parent**, **Home**, **Reveal**, and **Refresh** controls for loose
+browsing. From the keyboard, `^` moves the Global root to its parent, `~`
+switches to Global at `$HOME`, `.` reveals the active file, and `g` refreshes the
+tree. The existing tab-line remains below the workspace bar and shows only files
+belonging to the selected workspace.
+
+Vterm, builds, tests, and diagnostics share a bottom panel. Project search uses
+a persistent ripgrep results panel. An optional code minimap opens on the right
+edge of the active editor and supports mouse navigation; it remains off until
+requested so the Codex sidebar can retain the full panel width.
 
 | Shortcut | Action |
 |---|---|
@@ -144,11 +154,34 @@ Codex sidebar can retain the full panel width.
 | `F12` / `Shift-F12` | Definition / references |
 | `Cmd-.` | LSP code action |
 | `Cmd-S` / `Cmd-W` | Save / close buffer |
+| `Cmd-Shift-[` / `Cmd-Shift-]` | Previous / next workspace |
 | `Cmd-1`, `Cmd-2`, `Cmd-3` | Select editor window |
 | `C-c f` | Explicitly format the current buffer |
 | `C-c m` | Toggle the code minimap |
 
 Native `C-` and `M-` Emacs editing commands remain unchanged.
+
+### Workspaces and restored sessions
+
+| Command | Action |
+|---|---|
+| `M-x gm/workspace-open` / `C-c w o` | Register or select a Git worktree |
+| `M-x gm/workspace-switch` / `C-c w s` | Select Global or a repository workspace |
+| `M-x gm/workspace-global` / `C-c w g` | Open the Global loose-file workspace |
+| `M-x gm/workspace-close` / `C-c w c` | Close a repository workspace without killing files |
+| `M-x gm/project-status` / `C-c w m` | Open Magit/VC for the active workspace |
+| `M-x gm/session-save-now` / `C-c w S` | Save the current session immediately |
+
+Emacs saves session state under ignored `var/desktop/` on exit and after 60
+idle seconds. The next launch restores local file buffers, repository and Global
+tabs, splits, cursor positions, the selected workspace, and the last focused
+file. Terminals, language-server processes, diagnostics, Treemacs buffers,
+Codex panels, remote TRAMP files, and unsaved non-file buffers are deliberately
+not restarted. Normal modified-file save prompts still apply when quitting.
+
+Use `Emacs --no-desktop` for a clean recovery launch. Desktop locking is
+PID-aware: a second Emacs process does not load or overwrite the primary
+process's session.
 
 ## Codex and Git
 

@@ -29,6 +29,11 @@
    `(window-divider ((t (:foreground ,border))))
    `(mode-line ((t (:background ,panel :foreground ,fg :box (:line-width 1 :color ,border)))))
    `(mode-line-inactive ((t (:background ,panel :foreground ,dim :box (:line-width 1 :color ,border)))))
+   `(tab-bar ((t (:background ,panel :foreground ,muted :box nil :height 0.95))))
+   `(tab-bar-tab ((t (:background ,bg :foreground ,fg :weight bold
+                      :box (:line-width 1 :color ,border) :overline ,teal))))
+   `(tab-bar-tab-inactive ((t (:background ,panel :foreground ,dim
+                               :box (:line-width 1 :color ,border)))))
    `(tab-line ((t (:background ,panel :foreground ,muted :height 0.95))))
    `(tab-line-tab ((t (:background ,bg :foreground ,fg :box (:line-width 1 :color ,border)))))
    `(tab-line-tab-current ((t (:background ,bg :foreground ,fg :weight bold :overline ,blue))))

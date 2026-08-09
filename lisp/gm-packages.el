@@ -6,11 +6,13 @@
 (declare-function global-diff-hl-mode "diff-hl")
 (declare-function diff-hl-flydiff-mode "diff-hl-flydiff")
 (declare-function gm/treemacs-reveal-current-file "gm-project")
+(declare-function gm/treemacs--find-file-node-when-root-ready "gm-project")
 (declare-function gm/treemacs-root-up "gm-project")
 (declare-function gm/treemacs-setup-buffer "gm-project")
 (declare-function gm/treemacs-show-home "gm-project")
 (declare-function lsp-dependency "lsp-mode")
 (declare-function treemacs-follow-mode "treemacs-follow-mode")
+(declare-function treemacs-find-file-node "treemacs-core-utils")
 
 (defvar corfu-auto-delay)
 (defvar lsp-clients-angular-language-server-command)
@@ -205,12 +207,20 @@
   :commands (treemacs treemacs-select-window treemacs-quit)
   :init
   (setq treemacs-width 34
-        treemacs-follow-after-init t
+        ;; Workspace initialization replaces Treemacs's project model.  Trying
+        ;; to follow a file before the replacement DOM is ready can loop while
+        ;; looking for a parent node.  Normal follow mode is enabled below.
+        treemacs-follow-after-init nil
         treemacs-is-never-other-window t
+        treemacs-persist-file nil
         treemacs-show-hidden-files t
         treemacs-silent-refresh t
         treemacs-user-header-line-format '(:eval (gm/treemacs-header-line)))
   :config
+  (unless (advice-member-p #'gm/treemacs--find-file-node-when-root-ready
+                           #'treemacs-find-file-node)
+    (advice-add 'treemacs-find-file-node :around
+                #'gm/treemacs--find-file-node-when-root-ready))
   (add-to-list 'treemacs-ignored-file-predicates #'gm/treemacs-ignore-runtime-p)
   (add-hook 'treemacs-mode-hook #'gm/treemacs-setup-buffer)
   (dolist (buffer (buffer-list))
@@ -252,7 +262,7 @@
   :hook (minimap-sb-mode . gm/minimap-setup-buffer))
 
 (use-package flycheck
-  :hook (prog-mode . flycheck-mode))
+  :hook (prog-mode . gm/flycheck-mode-unless-restoring-session))
 
 (use-package lsp-mode
   :commands (lsp lsp-deferred lsp-execute-code-action lsp-find-definition lsp-find-references)
@@ -304,7 +314,7 @@
   :after lsp-mode
   :commands (dap-debug dap-hydra))
 
-(use-package magit :commands magit-status)
+(use-package magit :commands (magit-status magit-status-setup-buffer))
 (use-package diff-hl
   :init
   (global-diff-hl-mode 1)

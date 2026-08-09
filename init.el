@@ -9,6 +9,7 @@
 (require 'gm-core)
 (gm/core-initialize)
 
+(require 'gm-session)
 (require 'gm-java)
 (require 'gm-hocon-mode)
 (require 'gm-packages)
@@ -25,6 +26,7 @@
 (gm/languages-initialize)
 (gm/tools-initialize)
 (gm/codex-initialize)
+(gm/session-initialize)
 
 (provide 'init)
 ;;; init.el ends here
