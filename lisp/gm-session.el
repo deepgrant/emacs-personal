@@ -1,5 +1,6 @@
 ;;; gm-session.el --- Persistent editor sessions -*- lexical-binding: t; -*-
 
+(require 'cl-lib)
 (require 'desktop)
 (require 'frameset)
 (require 'gm-core)
@@ -133,6 +134,260 @@ Top-level states carry constraints before their type; nested nodes do not."
                                (gm/session--window-state-node-body state))))
     (assq 'window-side (cdr parameters))))
 
+(defconst gm/session--window-geometry-properties
+  '(pixel-width pixel-height total-width total-height normal-width normal-height)
+  "Window-state properties that describe a node's allocation.")
+
+(defun gm/session--window-state-top-level-p (state)
+  "Return non-nil when STATE includes top-level window constraints."
+  (and (consp state)
+       (not (memq (car state) '(leaf hc vc)))
+       (memq (cadr state) '(leaf hc vc))))
+
+(defun gm/session--window-state-node-metadata (state)
+  "Return a copy of STATE metadata, excluding child window nodes."
+  (copy-tree
+   (seq-remove #'gm/session--window-state-node-p
+               (gm/session--window-state-node-body state))))
+
+(defun gm/session--window-state-node-children (state)
+  "Return STATE's child window nodes in display order."
+  (seq-filter #'gm/session--window-state-node-p
+              (gm/session--window-state-node-body state)))
+
+(defun gm/session--window-state-build-node (template type metadata children)
+  "Build a TYPE node like TEMPLATE from METADATA and CHILDREN."
+  (append (if (gm/session--window-state-top-level-p template)
+              (list (copy-tree (car template)) type)
+            (list type))
+          metadata
+          children))
+
+(defun gm/session--window-state-metadata-set (metadata property value)
+  "Return METADATA with PROPERTY set to VALUE."
+  (let ((copy (copy-tree metadata)))
+    (if-let ((cell (assq property copy)))
+        (setcdr cell value)
+      (setq copy (append copy (list (cons property value)))))
+    copy))
+
+(defun gm/session--window-state-property (state property)
+  "Return PROPERTY from STATE's node metadata."
+  (cdr (assq property (gm/session--window-state-node-body state))))
+
+(defun gm/session--window-state-allocation (state)
+  "Return STATE's geometry allocation as an alist."
+  (mapcar (lambda (property)
+            (cons property (gm/session--window-state-property state property)))
+          gm/session--window-geometry-properties))
+
+(defun gm/session--window-state-set-allocation (state allocation)
+  "Return a copy of STATE using ALLOCATION geometry."
+  (let ((metadata (gm/session--window-state-node-metadata state)))
+    (dolist (entry allocation)
+      (when (numberp (cdr entry))
+        (setq metadata
+              (gm/session--window-state-metadata-set
+               metadata (car entry) (cdr entry)))))
+    (gm/session--window-state-build-node
+     state
+     (gm/session--window-state-node-type state)
+     metadata
+     (copy-tree (gm/session--window-state-node-children state)))))
+
+(defun gm/session--window-state-set-last (state last-p)
+  "Return a copy of STATE whose sibling terminator reflects LAST-P."
+  (let ((metadata
+         (seq-remove (lambda (entry) (eq (car-safe entry) 'last))
+                     (gm/session--window-state-node-metadata state))))
+    (when last-p
+      (setq metadata (cons '(last . t) metadata)))
+    (gm/session--window-state-build-node
+     state
+     (gm/session--window-state-node-type state)
+     metadata
+     (copy-tree (gm/session--window-state-node-children state)))))
+
+(defun gm/session--window-state-normalized-shares (children property)
+  "Return CHILDREN's positive PROPERTY weights normalized to one."
+  (let* ((weights
+          (mapcar (lambda (child)
+                    (let ((weight (gm/session--window-state-property
+                                   child property)))
+                      (if (and (numberp weight) (> weight 0))
+                          (float weight)
+                        1.0)))
+                  children))
+         (total (apply #'+ weights)))
+    (mapcar (lambda (weight) (/ weight total)) weights)))
+
+(defun gm/session--window-state-integer-shares (total shares)
+  "Distribute integer TOTAL according to SHARES.
+The final share absorbs rounding differences."
+  (if (not (numberp total))
+      (make-list (length shares) nil)
+    (let ((remaining total)
+          result)
+      (cl-loop for share in shares
+               for index from 0
+               for final = (= index (1- (length shares)))
+               for size = (if final
+                              remaining
+                            (max 0 (min remaining (round (* total share)))))
+               do (push size result)
+               do (setq remaining (- remaining size)))
+      (nreverse result))))
+
+(defun gm/session--window-state-child-allocations (state children)
+  "Return rebased geometry allocations for STATE's surviving CHILDREN."
+  (let* ((horizontal (eq (gm/session--window-state-node-type state) 'hc))
+         (normal-property (if horizontal 'normal-width 'normal-height))
+         (shares (gm/session--window-state-normalized-shares
+                  children normal-property))
+         (pixel-total (gm/session--window-state-property
+                       state (if horizontal 'pixel-width 'pixel-height)))
+         (character-total (gm/session--window-state-property
+                           state (if horizontal 'total-width 'total-height)))
+         (pixel-shares (gm/session--window-state-integer-shares
+                        pixel-total shares))
+         (character-shares (gm/session--window-state-integer-shares
+                            character-total shares)))
+    (cl-loop for share in shares
+             for pixel-size in pixel-shares
+             for character-size in character-shares
+             collect
+             `((normal-width . ,(if horizontal share 1.0))
+               (normal-height . ,(if horizontal 1.0 share))
+               (pixel-width . ,(if horizontal
+                                   pixel-size
+                                 (gm/session--window-state-property
+                                  state 'pixel-width)))
+               (pixel-height . ,(if horizontal
+                                    (gm/session--window-state-property
+                                     state 'pixel-height)
+                                  pixel-size))
+               (total-width . ,(if horizontal
+                                   character-size
+                                 (gm/session--window-state-property
+                                  state 'total-width)))
+               (total-height . ,(if horizontal
+                                    (gm/session--window-state-property
+                                     state 'total-height)
+                                  character-size))))))
+
+(defun gm/session--window-state-resize-node (state allocation)
+  "Resize STATE and its descendants to fit ALLOCATION."
+  (let* ((resized (gm/session--window-state-set-allocation state allocation))
+         (type (gm/session--window-state-node-type resized))
+         (children (gm/session--window-state-node-children resized)))
+    (if (not (memq type '(hc vc)))
+        resized
+      (let* ((allocations
+              (gm/session--window-state-child-allocations resized children))
+             (last-index (1- (length children)))
+             (resized-children
+              (cl-loop for child in children
+                       for child-allocation in allocations
+                       for index from 0
+                       collect
+                       (gm/session--window-state-set-last
+                        (gm/session--window-state-resize-node
+                         child child-allocation)
+                        (= index last-index)))))
+        (gm/session--window-state-build-node
+         resized type
+         (gm/session--window-state-node-metadata resized)
+         resized-children)))))
+
+(defun gm/session--sanitize-window-history (metadata)
+  "Remove unsafe buffer history entries from leaf METADATA."
+  (delq
+   nil
+   (mapcar
+    (lambda (entry)
+      (pcase (car-safe entry)
+        ('next-buffers
+         (when-let ((buffers
+                     (seq-filter #'gm/session--restorable-window-buffer-p
+                                 (cdr entry))))
+           (cons 'next-buffers buffers)))
+        ('prev-buffers
+         (when-let ((buffers
+                     (seq-filter
+                      (lambda (buffer-state)
+                        (gm/session--restorable-window-buffer-p
+                         (car-safe buffer-state)))
+                      (cdr entry))))
+           (cons 'prev-buffers (copy-tree buffers))))
+        (_ (copy-tree entry))))
+    metadata)))
+
+(defun gm/session--sanitize-window-state-node (state)
+  "Return a surgically sanitized copy of window node STATE, or nil."
+  (pcase (gm/session--window-state-node-type state)
+    ('leaf
+     (let* ((metadata (gm/session--window-state-node-metadata state))
+            (name (cadr (assq 'buffer metadata))))
+       (when (and (not (gm/session--side-window-state-p state))
+                  (gm/session--restorable-window-buffer-p name))
+         (gm/session--window-state-build-node
+          state 'leaf (gm/session--sanitize-window-history metadata) nil))))
+    ((and type (or 'hc 'vc))
+     (let* ((metadata (gm/session--window-state-node-metadata state))
+            (children
+             (delq nil
+                   (mapcar #'gm/session--sanitize-window-state-node
+                           (gm/session--window-state-node-children state)))))
+       (pcase (length children)
+         (0 nil)
+         (1
+          (let* ((parent-last (cdr (assq 'last metadata)))
+                 (promoted
+                  (gm/session--window-state-resize-node
+                   (car children)
+                   (gm/session--window-state-allocation state))))
+            (setq promoted
+                  (gm/session--window-state-set-last promoted parent-last))
+            (if (gm/session--window-state-top-level-p state)
+                (cons (copy-tree (car state)) promoted)
+              promoted)))
+         (_
+          (gm/session--window-state-resize-node
+           (gm/session--window-state-build-node state type metadata children)
+           (gm/session--window-state-allocation state))))))))
+
+(defun gm/session--window-state-leaves (state)
+  "Return every leaf in STATE in display order."
+  (if (eq (gm/session--window-state-node-type state) 'leaf)
+      (list state)
+    (mapcan #'gm/session--window-state-leaves
+            (gm/session--window-state-node-children state))))
+
+(defun gm/session--window-state-leaf-selected-p (leaf)
+  "Return non-nil when LEAF carries the selected-window marker."
+  (when-let ((buffer-entry
+              (assq 'buffer (gm/session--window-state-node-body leaf))))
+    (cdr (assq 'selected (cddr buffer-entry)))))
+
+(defun gm/session--window-state-set-leaf-selected (leaf selected-p)
+  "Set LEAF's selected-window marker according to SELECTED-P."
+  (when-let ((buffer-entry
+              (assq 'buffer (gm/session--window-state-node-body leaf))))
+    (if-let ((selected (assq 'selected (cddr buffer-entry))))
+        (setcdr selected selected-p)
+      (setcdr (cdr buffer-entry)
+              (cons (cons 'selected selected-p) (cddr buffer-entry)))))
+  leaf)
+
+(defun gm/session--repair-window-state-selection (state)
+  "Ensure exactly one surviving leaf in STATE is marked selected."
+  (let* ((leaves (gm/session--window-state-leaves state))
+         (selected (or (seq-find #'gm/session--window-state-leaf-selected-p leaves)
+                       (car leaves))))
+    (dolist (leaf leaves)
+      (gm/session--window-state-set-leaf-selected leaf (eq leaf selected)))
+    state))
+
 (defun gm/session--safe-window-state-node-p (state)
   "Return non-nil when STATE contains only local files and no side windows."
   (pcase (gm/session--window-state-node-type state)
@@ -156,11 +411,14 @@ Top-level states carry constraints before their type; nested nodes do not."
     (window-state-get (frame-root-window) 'writable)))
 
 (defun gm/session-sanitize-window-state (state)
-  "Return a restorable local-file-only version of window STATE."
-  (if (and (gm/session--window-state-node-p state)
-           (gm/session--safe-window-state-node-p state))
-      state
-    (gm/session--fallback-window-state)))
+  "Return a restorable local-file-only version of window STATE.
+Unsafe leaves are removed without collapsing surviving editor splits."
+  (let ((sanitized
+         (and (gm/session--window-state-node-p state)
+              (gm/session--sanitize-window-state-node state))))
+    (if sanitized
+        (gm/session--repair-window-state-selection sanitized)
+      (gm/session--fallback-window-state))))
 
 (defun gm/session--filter-tabs (current filtered parameters saving)
   "Filter tab CURRENT like Desktop, then sanitize saved window states.

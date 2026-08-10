@@ -40,6 +40,26 @@
            ,@body)
        (tab-bar-tabs-set saved-tabs))))
 
+(defun gm-test-window-state-buffer-names (state)
+  "Return the leaf buffer names serialized in window STATE."
+  (mapcar (lambda (leaf)
+            (cadr (assq 'buffer (gm/session--window-state-node-body leaf))))
+          (gm/session--window-state-leaves state)))
+
+(defun gm-test-editor-windows ()
+  "Return non-side windows in the selected frame."
+  (seq-remove (lambda (window) (window-parameter window 'window-side))
+              (window-list)))
+
+(defun gm-test-window-width-ratio (buffer)
+  "Return BUFFER's share of the selected frame's editor-window width."
+  (let* ((windows (gm-test-editor-windows))
+         (window (seq-find (lambda (candidate)
+                             (eq (window-buffer candidate) buffer))
+                           windows)))
+    (/ (float (window-total-width window))
+       (apply #'+ (mapcar #'window-total-width windows)))))
+
 (ert-deftest gm-theme-loads ()
   (load-theme 'gm-cursor-dark t)
   (should (custom-theme-enabled-p 'gm-cursor-dark)))
@@ -231,25 +251,195 @@
       (should-not (memq #'gm/language-services-after-session-command
                         post-command-hook)))))
 
-(ert-deftest gm-session-discards-generated-window-state-safely ()
-  (let ((file (make-temp-file "gm-session-window-state-"))
-        file-buffer generated-buffer)
+(ert-deftest gm-session-surgically-removes-side-window-and-preserves-split ()
+  (let ((file-a (make-temp-file "gm-session-window-a-"))
+        (file-b (make-temp-file "gm-session-window-b-"))
+        file-buffer-a file-buffer-b generated-buffer)
     (unwind-protect
         (save-window-excursion
-          (setq file-buffer (find-file-noselect file)
+          (delete-other-windows)
+          (setq file-buffer-a (find-file-noselect file-a)
+                file-buffer-b (find-file-noselect file-b)
                 generated-buffer (get-buffer-create " *gm-session-generated*"))
-          (switch-to-buffer file-buffer)
+          (switch-to-buffer file-buffer-a)
+          (let ((peer (split-window-right 29)))
+            (set-window-buffer peer file-buffer-b))
           (display-buffer-in-side-window
            generated-buffer '((side . left) (slot . 0)))
-          (let ((state (window-state-get (frame-root-window) 'writable)))
+          (let* ((before-ratio (gm-test-window-width-ratio file-buffer-a))
+                 (state (window-state-get (frame-root-window) 'writable))
+                 (original (copy-tree state))
+                 (safe (gm/session-sanitize-window-state state)))
             (should-not (gm/session--safe-window-state-node-p state))
-            (let ((safe (gm/session-sanitize-window-state state)))
-              (should (gm/session--safe-window-state-node-p safe))
-              (should-not (string-match-p "gm-session-generated"
-                                          (prin1-to-string safe))))))
-      (when (buffer-live-p file-buffer) (kill-buffer file-buffer))
+            (should (equal state original))
+            (should (gm/session--safe-window-state-node-p safe))
+            (should (equal (sort (gm-test-window-state-buffer-names safe)
+                                 #'string<)
+                           (sort (list (buffer-name file-buffer-a)
+                                       (buffer-name file-buffer-b))
+                                 #'string<)))
+            (should-not (string-match-p "gm-session-generated"
+                                        (prin1-to-string safe)))
+            (window-state-put safe (frame-root-window) 'safe)
+            (let ((window-a (get-buffer-window file-buffer-a))
+                  (window-b (get-buffer-window file-buffer-b)))
+              (should (= (length (gm-test-editor-windows)) 2))
+              (should (< (window-pixel-left window-a)
+                         (window-pixel-left window-b)))
+              (should (= (window-pixel-top window-a)
+                         (window-pixel-top window-b))))
+            (should (< (abs (- before-ratio
+                               (gm-test-window-width-ratio file-buffer-a)))
+                       0.06))))
+      (when (buffer-live-p file-buffer-a) (kill-buffer file-buffer-a))
+      (when (buffer-live-p file-buffer-b) (kill-buffer file-buffer-b))
       (when (buffer-live-p generated-buffer) (kill-buffer generated-buffer))
+      (delete-file file-a)
+      (delete-file file-b))))
+
+(ert-deftest gm-session-preserves-nested-split-orientations ()
+  (let ((files (mapcar (lambda (_) (make-temp-file "gm-session-nested-"))
+                       '(a b c)))
+        buffers generated)
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (setq buffers (mapcar #'find-file-noselect files)
+                generated (get-buffer-create " *gm-session-nested-panel*"))
+          (switch-to-buffer (nth 0 buffers))
+          (let ((right (split-window-right)))
+            (set-window-buffer right (nth 1 buffers))
+            (with-selected-window right
+              (let ((bottom (split-window-below)))
+                (set-window-buffer bottom (nth 2 buffers)))))
+          (display-buffer-in-side-window
+           generated '((side . left) (slot . 0)))
+          (let ((safe (gm/session-sanitize-window-state
+                       (window-state-get (frame-root-window) 'writable))))
+            (window-state-put safe (frame-root-window) 'safe)
+            (let ((a (get-buffer-window (nth 0 buffers)))
+                  (b (get-buffer-window (nth 1 buffers)))
+                  (c (get-buffer-window (nth 2 buffers))))
+              (should (= (length (gm-test-editor-windows)) 3))
+              (should (< (window-pixel-left a) (window-pixel-left b)))
+              (should (= (window-pixel-left b) (window-pixel-left c)))
+              (should (< (window-pixel-top b) (window-pixel-top c))))))
+      (mapc (lambda (buffer)
+              (when (buffer-live-p buffer) (kill-buffer buffer)))
+            buffers)
+      (when (buffer-live-p generated) (kill-buffer generated))
+      (mapc #'delete-file files))))
+
+(ert-deftest gm-session-drops-killed-leaf-without-losing-survivor ()
+  (let ((file-a (make-temp-file "gm-session-killed-a-"))
+        (file-b (make-temp-file "gm-session-killed-b-"))
+        buffer-a buffer-b)
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (setq buffer-a (find-file-noselect file-a)
+                buffer-b (find-file-noselect file-b))
+          (switch-to-buffer buffer-a)
+          (let ((peer (split-window-right)))
+            (set-window-buffer peer buffer-b)
+            (select-window peer))
+          (let* ((state (window-state-get (frame-root-window) 'writable))
+                 (original (copy-tree state)))
+            (kill-buffer buffer-b)
+            (setq buffer-b nil)
+            (let ((safe (gm/session-sanitize-window-state state)))
+              (should (equal state original))
+              (should (eq (gm/session--window-state-node-type safe) 'leaf))
+              (should (equal (gm-test-window-state-buffer-names safe)
+                             (list (buffer-name buffer-a))))
+              (should (gm/session--window-state-leaf-selected-p
+                       (car (gm/session--window-state-leaves safe)))))))
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+      (when (buffer-live-p buffer-b) (kill-buffer buffer-b))
+      (delete-file file-a)
+      (delete-file file-b))))
+
+(ert-deftest gm-session-falls-back-only-when-no-editor-leaf-survives ()
+  (let ((generated (get-buffer-create " *gm-session-only-generated*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer generated)
+          (let ((safe (gm/session-sanitize-window-state
+                       (window-state-get (frame-root-window) 'writable))))
+            (should (eq (gm/session--window-state-node-type safe) 'leaf))
+            (should (equal (gm-test-window-state-buffer-names safe)
+                           '("*scratch*")))))
+      (when (buffer-live-p generated) (kill-buffer generated)))))
+
+(ert-deftest gm-session-filters-unsafe-leaf-buffer-history ()
+  (let ((file (make-temp-file "gm-session-history-"))
+        file-buffer generated)
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (setq file-buffer (find-file-noselect file)
+                generated (get-buffer-create " *gm-session-history-generated*"))
+          (switch-to-buffer file-buffer)
+          (let* ((state (window-state-get (frame-root-window) 'writable))
+                 (leaf (car (gm/session--window-state-leaves state)))
+                 (generated-name (buffer-name generated)))
+            (setcdr leaf
+                    (append (cdr leaf)
+                            `((next-buffers . (,generated-name "*scratch*"))
+                              (prev-buffers . ((,generated-name 1 1)
+                                               ("*scratch*" 1 1))))))
+            (let ((safe (gm/session-sanitize-window-state state)))
+              (should-not (string-match-p (regexp-quote generated-name)
+                                          (prin1-to-string safe)))
+              (should (string-match-p "\\*scratch\\*"
+                                      (prin1-to-string safe))))))
+      (when (buffer-live-p file-buffer) (kill-buffer file-buffer))
+      (when (buffer-live-p generated) (kill-buffer generated))
       (delete-file file))))
+
+(ert-deftest gm-session-tab-filter-preserves-background-split ()
+  (let ((file-a (make-temp-file "gm-session-tab-a-"))
+        (file-b (make-temp-file "gm-session-tab-b-"))
+        buffer-a buffer-b generated)
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (gm-test-with-workspace-tabs
+            (setq buffer-a (find-file-noselect file-a)
+                  buffer-b (find-file-noselect file-b)
+                  generated (get-buffer-create " *gm-session-tab-panel*"))
+            (switch-to-buffer buffer-a)
+            (let ((peer (split-window-right 27)))
+              (set-window-buffer peer buffer-b))
+            (display-buffer-in-side-window
+             generated '((side . left) (slot . 0)))
+            (let ((before-ratio (gm-test-window-width-ratio buffer-a)))
+              (tab-bar-new-tab)
+              (let* ((parameter
+                      (gm/session--filter-tabs
+                       (cons 'tabs (tab-bar-tabs)) nil nil t))
+                     (background
+                      (seq-find
+                       (lambda (tab)
+                         (when-let ((state (alist-get 'ws tab)))
+                           (member (buffer-name buffer-a)
+                                   (gm-test-window-state-buffer-names state))))
+                       (cdr parameter)))
+                     (state (and background (alist-get 'ws background))))
+                (should state)
+                (should-not (string-match-p "gm-session-tab-panel"
+                                            (prin1-to-string state)))
+                (window-state-put state (frame-root-window) 'safe)
+                (should (= (length (gm-test-editor-windows)) 2))
+                (should (< (abs (- before-ratio
+                                   (gm-test-window-width-ratio buffer-a)))
+                           0.06))))))
+      (when (buffer-live-p buffer-a) (kill-buffer buffer-a))
+      (when (buffer-live-p buffer-b) (kill-buffer buffer-b))
+      (when (buffer-live-p generated) (kill-buffer generated))
+      (delete-file file-a)
+      (delete-file file-b))))
 
 (ert-deftest gm-session-secondary-instance-cannot-save-the-primary-desktop ()
   (let ((desktop-save-mode t)

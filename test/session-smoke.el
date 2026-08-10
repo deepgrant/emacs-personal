@@ -45,10 +45,12 @@
          (repo-b (gm-session-smoke--git-init (expand-file-name "two/repository" root)))
          (loose-file (expand-file-name "loose.txt" root))
          (repo-a-file (expand-file-name "alpha.txt" repo-a))
+         (repo-a-peer (expand-file-name "delta.txt" repo-a))
          (repo-b-file (expand-file-name "bravo.txt" repo-b))
          (repo-b-peer (expand-file-name "charlie.txt" repo-b)))
     (gm-session-smoke--write-file loose-file "loose global file\n")
     (gm-session-smoke--write-file repo-a-file "alpha workspace file\n")
+    (gm-session-smoke--write-file repo-a-peer "delta background split file\n")
     (gm-session-smoke--write-file repo-b-file "bravo workspace file\n")
     (gm-session-smoke--write-file repo-b-peer "charlie split file\n")
     (set-frame-parameter nil 'tabs nil)
@@ -58,6 +60,16 @@
     (gm/workspace-open repo-a)
     (find-file repo-a-file)
     (goto-char 8)
+    ;; Build the GUI-shaped failure case before leaving this tab.  The side
+    ;; window and the editor split are serialized only in this background tab's
+    ;; `ws', so live-frame pruning cannot hide a tab sanitizer regression.
+    (display-buffer-in-side-window
+     (get-buffer-create " *gm-session-background-panel*")
+     '((side . left) (slot . 0) (window-width . 0.15)))
+    (let ((peer-window (split-window-right 25)))
+      (set-window-buffer peer-window (find-file-noselect repo-a-peer))
+      (select-window peer-window)
+      (goto-char 11))
     (gm/workspace-open repo-b)
     (find-file repo-b-file)
     (goto-char 9)
@@ -66,7 +78,7 @@
       (select-window peer-window)
       (goto-char 10))
     (display-buffer-in-side-window
-     (get-buffer-create " *gm-session-generated-panel*")
+     (get-buffer-create " *gm-session-live-panel*")
      '((side . left) (slot . 0) (window-width . 0.15)))
     (setq gm/session-last-file repo-b-peer)
     (gm-session-smoke--assert (= (length (gm/workspace--registered-roots)) 2)
@@ -92,6 +104,7 @@
                   (file-truename (expand-file-name "two/repository" root))))
          (loose-file (expand-file-name "loose.txt" root))
          (repo-a-file (expand-file-name "alpha.txt" repo-a))
+         (repo-a-peer (expand-file-name "delta.txt" repo-a))
          (repo-b-file (expand-file-name "bravo.txt" repo-b))
          (repo-b-peer (expand-file-name "charlie.txt" repo-b)))
     (set-frame-parameter nil 'tabs nil)
@@ -112,7 +125,8 @@
      "restored repository metadata differs from the saved roots")
     (gm-session-smoke--assert (equal (gm/workspace-current-root) repo-b)
                               "the selected workspace was not restored")
-    (dolist (file (list loose-file repo-a-file repo-b-file repo-b-peer))
+    (dolist (file (list loose-file repo-a-file repo-a-peer
+                        repo-b-file repo-b-peer))
       (gm-session-smoke--assert (get-file-buffer file)
                                 "file buffer was not restored: %s" file))
     (gm-session-smoke--assert (equal buffer-file-name repo-b-peer)
@@ -120,7 +134,42 @@
     (gm-session-smoke--assert (= (point) 10)
                               "last-focused cursor position was not restored")
     (gm-session-smoke--assert (= (length (window-list)) 2)
-                              "the selected workspace split was not restored")))
+                              "the selected workspace split was not restored")
+    (gm-session-smoke--assert
+     (not (seq-some (lambda (window) (window-parameter window 'window-side))
+                    (window-list)))
+     "the selected workspace restored a generated side window")
+    ;; The first repository was a background tab at save time.  Its split must
+    ;; survive surgical removal of the serialized side window.
+    (gm/workspace--select-tab (gm/workspace--repository-tab-index repo-a))
+    (let* ((alpha-buffer (get-file-buffer repo-a-file))
+           (delta-buffer (get-file-buffer repo-a-peer))
+           (alpha-window (get-buffer-window alpha-buffer))
+           (delta-window (get-buffer-window delta-buffer))
+           (editor-windows
+            (seq-remove (lambda (window) (window-parameter window 'window-side))
+                        (window-list)))
+           (alpha-ratio
+            (/ (float (window-total-width alpha-window))
+               (apply #'+ (mapcar #'window-total-width editor-windows)))))
+      (gm-session-smoke--assert (= (length editor-windows) 2)
+                                "the background workspace split was lost")
+      (gm-session-smoke--assert (and alpha-window delta-window)
+                                "background workspace files are not both displayed")
+      (gm-session-smoke--assert
+       (< (window-pixel-left alpha-window) (window-pixel-left delta-window))
+       "background workspace split orientation changed")
+      (gm-session-smoke--assert
+       (< (abs (- alpha-ratio (/ 25.0 68.0))) 0.08)
+       "background workspace split ratio changed: %.3f" alpha-ratio)
+      (gm-session-smoke--assert (= (window-point alpha-window) 8)
+                                "alpha cursor position was not restored")
+      (gm-session-smoke--assert (= (window-point delta-window) 11)
+                                "delta cursor position was not restored")
+      (gm-session-smoke--assert
+       (not (seq-some (lambda (window) (window-parameter window 'window-side))
+                      (window-list)))
+       "background workspace restored its generated side window"))))
 
 (let ((root (getenv "GM_SESSION_SMOKE_ROOT"))
       (phase (getenv "GM_SESSION_SMOKE_PHASE")))
