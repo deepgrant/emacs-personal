@@ -15,11 +15,11 @@ if [[ ! -x "${session_test_emacs}" ]] && ! command -v "${session_test_emacs}" >/
   exit 1
 fi
 
-for session_test_phase in save restore; do
+for session_test_phase in save restore corrupt recover restore-recovered; do
   GM_SESSION_SMOKE_ROOT="${session_test_state}" \
   GM_SESSION_SMOKE_PHASE="${session_test_phase}" \
   "${session_test_emacs}" --batch -Q \
     -l "${session_test_root}/test/session-smoke.el"
 done
 
-echo "Desktop session round-trip passed."
+echo "Desktop session round-trip and corrupt recovery passed."

@@ -23,6 +23,9 @@
 (defvar gm/session-after-restore-hook nil
   "Hook run after desktop state is restored or a new session is initialized.")
 
+(defvar gm/session--last-restore-error nil
+  "Most recent error caught while loading the initial desktop session.")
+
 (defconst gm/session-process-minor-modes
   '(dap-mode
     dap-ui-mode
@@ -87,10 +90,109 @@
 
 (defun gm/session--finish-restore ()
   "Finish session restoration and notify dependent modules."
-  (setq gm/session-restored-p t)
-  (run-hooks 'gm/session-after-restore-hook)
-  (gm/session-focus-last-file)
-  (setq gm/session-restoring-p nil))
+  (unless gm/session-restored-p
+    (setq gm/session-restored-p t)
+    (unwind-protect
+        (progn
+          (run-hooks 'gm/session-after-restore-hook)
+          (gm/session-focus-last-file))
+      (setq gm/session-restoring-p nil))))
+
+(defun gm/session--corrupt-desktop-name (desktop-file)
+  "Return an unused quarantine name for DESKTOP-FILE."
+  (let* ((base (format "%s.corrupt-%s-%d"
+                       desktop-file
+                       (format-time-string "%Y%m%d-%H%M%S")
+                       (emacs-pid)))
+         (candidate base)
+         (suffix 1))
+    (while (file-exists-p candidate)
+      (setq candidate (format "%s-%d" base suffix)
+            suffix (1+ suffix)))
+    candidate))
+
+(defun gm/session--reset-incomplete-desktop-state ()
+  "Discard transient state left behind by an interrupted desktop load."
+  (desktop-lazy-abort)
+  (setq desktop-delay-hook nil
+        desktop-buffer-args-list nil
+        desktop-saved-frameset nil
+        desktop-file-modtime nil
+        desktop-io-file-version nil))
+
+(defun gm/session--recover-desktop-read-failure (error-data)
+  "Recover the initial desktop session after ERROR-DATA.
+The unreadable desktop is quarantined before a fresh session is saved."
+  (let* ((desktop-file (desktop-full-file-name gm/session-directory))
+         (quarantine-file nil)
+         (recovery-error nil)
+         (fresh-session-p nil))
+    (setq gm/session--last-restore-error error-data)
+    (desktop-save-mode -1)
+    (condition-case recovery-data
+        (progn
+          (when (file-exists-p desktop-file)
+            (let ((candidate (gm/session--corrupt-desktop-name desktop-file)))
+              (rename-file desktop-file candidate)
+              (setq quarantine-file candidate)))
+          (gm/session--reset-incomplete-desktop-state)
+          (desktop-save gm/session-directory nil nil desktop-native-file-version)
+          (desktop-save-mode 1)
+          (setq fresh-session-p t))
+      (error
+       (setq recovery-error recovery-data)
+       ;; If the failed fresh save claimed the lock, do not leave this
+       ;; non-saving instance looking like the desktop owner.
+       (when quarantine-file
+         (ignore-errors (desktop-release-lock gm/session-directory)))))
+    (unwind-protect
+        (display-warning
+         'gm-session
+         (concat
+          (format "Desktop restoration failed: %s\n"
+                  (error-message-string error-data))
+          (if quarantine-file
+              (format "Unreadable desktop preserved as %s.\n" quarantine-file)
+            "No desktop file was available to quarantine.\n")
+          (cond
+           (fresh-session-p
+            "A fresh desktop was created and session saving remains enabled.")
+           (recovery-error
+            (format "Session saving is disabled because recovery failed: %s"
+                    (error-message-string recovery-error)))
+           (t "Session saving is disabled for this Emacs instance.")))
+         (if fresh-session-p :warning :error))
+      (gm/session--finish-restore))))
+
+(defun gm/session--read-with-recovery (function &rest arguments)
+  "Call desktop-read FUNCTION with guarded initial-restore recovery.
+ARGUMENTS are passed through unchanged.  Errors outside the unfinished
+startup restoration are re-signaled normally."
+  (condition-case error-data
+      (apply function arguments)
+    (error
+     (if (and gm/session-restoring-p
+              (not gm/session-restored-p))
+         (progn
+           (gm/session--recover-desktop-read-failure error-data)
+           nil)
+       (signal (car error-data) (cdr error-data))))))
+
+(defun gm/session--startup-failsafe ()
+  "Release session dependents if startup never completed restoration."
+  (unless gm/session-restored-p
+    (display-warning
+     'gm-session
+     "Desktop restoration did not report completion; enabling editor services without restored session state."
+     :warning)
+    (condition-case error-data
+        (gm/session--finish-restore)
+      (error
+       (display-warning
+        'gm-session
+        (format "A session after-restore hook failed: %s"
+                (error-message-string error-data))
+        :error)))))
 
 (defun gm/session--ignore-restored-minor-mode (_buffer-locals)
   "Ignore a process-backed minor mode found in an older desktop file."
@@ -508,7 +610,8 @@ FILTERED, PARAMETERS, and SAVING are passed to `frameset-filter-tabs'."
   "Configure safe persistent desktop restoration for interactive Emacs."
   (make-directory gm/session-directory t)
   (setq gm/session-restoring-p (not noninteractive)
-        gm/session-restored-p nil)
+        gm/session-restored-p nil
+        gm/session--last-restore-error nil)
   (setq desktop-path (list gm/session-directory)
         desktop-dirname gm/session-directory
         desktop-base-file-name "gm-desktop.el"
@@ -525,11 +628,14 @@ FILTERED, PARAMETERS, and SAVING are passed to `frameset-filter-tabs'."
         desktop-buffers-not-to-save-function #'gm/session-save-buffer-p)
   (gm/session--exclude-process-minor-modes)
   (gm/session--install-frameset-safety)
+  (unless (advice-member-p #'gm/session--read-with-recovery #'desktop-read)
+    (advice-add 'desktop-read :around #'gm/session--read-with-recovery))
   (add-to-list 'desktop-globals-to-save 'gm/session-last-file)
   (add-hook 'buffer-list-update-hook #'gm/session-track-focused-file)
   (add-hook 'desktop-after-read-hook #'gm/session--finish-restore)
   (add-hook 'desktop-no-desktop-file-hook #'gm/session--initialize-new-desktop)
   (add-hook 'desktop-not-loaded-hook #'gm/session--decline-locked-desktop)
+  (add-hook 'emacs-startup-hook #'gm/session--startup-failsafe)
   (unless noninteractive
     (desktop-save-mode 1)
     (when (member "--no-desktop" command-line-args)

@@ -25,6 +25,27 @@
   (make-directory (file-name-directory file) t)
   (with-temp-file file (insert contents)))
 
+(defun gm-session-smoke--read-file (file)
+  "Return FILE's literal contents."
+  (with-temp-buffer
+    (insert-file-contents-literally file)
+    (buffer-string)))
+
+(defun gm-session-smoke--readable-elisp-file-p (file)
+  "Return non-nil when every Lisp form in FILE can be read."
+  (condition-case nil
+      (with-temp-buffer
+        (insert-file-contents file)
+        (emacs-lisp-mode)
+        (check-parens)
+        (goto-char (point-min))
+        (while (progn
+                 (forward-comment (point-max))
+                 (not (eobp)))
+          (read (current-buffer)))
+        t)
+    (error nil)))
+
 (defun gm-session-smoke--git-init (directory)
   "Create a quiet Git repository in DIRECTORY and return its canonical root."
   (make-directory directory t)
@@ -171,6 +192,72 @@
                       (window-list)))
        "background workspace restored its generated side window"))))
 
+(defconst gm-session-smoke--corrupt-contents
+  "(setq gm/session-last-file \"truncated\""
+  "Deliberately truncated desktop contents used by the recovery smoke test.")
+
+(defun gm-session-smoke--write-corrupt-desktop (root)
+  "Write an unreadable desktop under ROOT for a later process to recover."
+  (let ((desktop-directory
+         (file-name-as-directory (expand-file-name "corrupt-desktop" root))))
+    (make-directory desktop-directory t)
+    (setq desktop-base-file-name "gm-desktop.el")
+    (gm-session-smoke--write-file
+     (desktop-full-file-name desktop-directory)
+     gm-session-smoke--corrupt-contents)))
+
+(defun gm-session-smoke--recover-corrupt-desktop (root)
+  "Recover the corrupt desktop under ROOT and validate the replacement."
+  (let* ((desktop-directory
+          (file-name-as-directory (expand-file-name "corrupt-desktop" root)))
+         (desktop-file (expand-file-name "gm-desktop.el" desktop-directory)))
+    (gm-session-smoke--configure desktop-directory)
+    (setq gm/session-restoring-p t
+          gm/session-restored-p nil)
+    (let ((noninteractive nil))
+      (gm-session-smoke--assert (not (desktop-read desktop-directory))
+                                "corrupt desktop unexpectedly loaded"))
+    (let ((quarantined
+           (directory-files desktop-directory t
+                            "\\`gm-desktop\\.el\\.corrupt-")))
+      (gm-session-smoke--assert (= (length quarantined) 1)
+                                "expected one quarantined desktop, found %d"
+                                (length quarantined))
+      (gm-session-smoke--assert
+       (equal (gm-session-smoke--read-file (car quarantined))
+              gm-session-smoke--corrupt-contents)
+       "quarantined desktop contents changed"))
+    (gm-session-smoke--assert gm/session-restored-p
+                              "corrupt recovery did not finish the session")
+    (gm-session-smoke--assert (not gm/session-restoring-p)
+                              "corrupt recovery left restoration active")
+    (gm-session-smoke--assert desktop-save-mode
+                              "corrupt recovery did not re-enable session saving")
+    (gm-session-smoke--assert (file-exists-p desktop-file)
+                              "corrupt recovery did not create a fresh desktop")
+    (gm-session-smoke--assert
+     (gm-session-smoke--readable-elisp-file-p desktop-file)
+     "replacement desktop is not readable Lisp")))
+
+(defun gm-session-smoke--restore-recovered-desktop (root)
+  "Load the recovered desktop under ROOT in a separate process."
+  (let* ((desktop-directory
+          (file-name-as-directory (expand-file-name "corrupt-desktop" root)))
+         (quarantine-pattern "\\`gm-desktop\\.el\\.corrupt-"))
+    (gm-session-smoke--configure desktop-directory)
+    (setq gm/session-restoring-p t
+          gm/session-restored-p nil)
+    (let ((noninteractive nil))
+      (gm-session-smoke--assert (desktop-read desktop-directory)
+                                "replacement desktop could not be loaded"))
+    (gm-session-smoke--assert gm/session-restored-p
+                              "replacement desktop did not finish restoration")
+    (gm-session-smoke--assert (not gm/session-restoring-p)
+                              "replacement desktop left restoration active")
+    (gm-session-smoke--assert
+     (= (length (directory-files desktop-directory t quarantine-pattern)) 1)
+     "loading the replacement created another quarantine")))
+
 (let ((root (getenv "GM_SESSION_SMOKE_ROOT"))
       (phase (getenv "GM_SESSION_SMOKE_PHASE")))
   (unless (and root phase)
@@ -178,6 +265,9 @@
   (pcase phase
     ("save" (gm-session-smoke--save root))
     ("restore" (gm-session-smoke--restore root))
+    ("corrupt" (gm-session-smoke--write-corrupt-desktop root))
+    ("recover" (gm-session-smoke--recover-corrupt-desktop root))
+    ("restore-recovered" (gm-session-smoke--restore-recovered-desktop root))
     (_ (gm-session-smoke--fail "unknown phase %s" phase))))
 
 ;;; session-smoke.el ends here

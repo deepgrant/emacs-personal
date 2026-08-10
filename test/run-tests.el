@@ -60,6 +60,21 @@
     (/ (float (window-total-width window))
        (apply #'+ (mapcar #'window-total-width windows)))))
 
+(defun gm-test-readable-elisp-file-p (file)
+  "Return non-nil when every Lisp form in FILE can be read."
+  (condition-case nil
+      (with-temp-buffer
+        (insert-file-contents file)
+        (emacs-lisp-mode)
+        (check-parens)
+        (goto-char (point-min))
+        (while (progn
+                 (forward-comment (point-max))
+                 (not (eobp)))
+          (read (current-buffer)))
+        t)
+    (error nil)))
+
 (ert-deftest gm-theme-loads ()
   (load-theme 'gm-cursor-dark t)
   (should (custom-theme-enabled-p 'gm-cursor-dark)))
@@ -225,11 +240,15 @@
           (should (eq (alist-get 'lsp-mode desktop-minor-mode-handlers)
                       #'gm/session--ignore-restored-minor-mode))
           (should (memq 'gm/session-last-file desktop-globals-to-save))
+          (should (advice-member-p #'gm/session--read-with-recovery
+                                   #'desktop-read))
+          (should (memq #'gm/session--startup-failsafe emacs-startup-hook))
           (should-not desktop-save-mode))
       (remove-hook 'buffer-list-update-hook #'gm/session-track-focused-file)
       (remove-hook 'desktop-after-read-hook #'gm/session--finish-restore)
       (remove-hook 'desktop-no-desktop-file-hook #'gm/session--initialize-new-desktop)
       (remove-hook 'desktop-not-loaded-hook #'gm/session--decline-locked-desktop)
+      (remove-hook 'emacs-startup-hook #'gm/session--startup-failsafe)
       (delete-directory gm/session-directory t))))
 
 (ert-deftest gm-session-defers-language-processes-until-the-buffer-is-used ()
@@ -250,6 +269,181 @@
       (should lsp-started)
       (should-not (memq #'gm/language-services-after-session-command
                         post-command-hook)))))
+
+(ert-deftest gm-session-corrupt-desktop-is-quarantined-and-services-recover ()
+  (let* ((gm/session-directory
+          (file-name-as-directory (make-temp-file "gm-session-corrupt-" t)))
+         (desktop-dirname gm/session-directory)
+         (desktop-path (list gm/session-directory))
+         (desktop-base-file-name "gm-desktop.el")
+         (desktop-base-lock-name "gm-desktop.lock")
+         (desktop-globals-to-save (copy-sequence desktop-globals-to-save))
+         (desktop-buffers-not-to-save-function #'gm/session-save-buffer-p)
+         (desktop-restore-frames t)
+         (desktop-save-mode nil)
+         (gm/session-restoring-p t)
+         (gm/session-restored-p nil)
+         (gm/session-last-file nil)
+         (gm/session--last-restore-error nil)
+         (routing-enabled nil)
+         (gm/session-after-restore-hook
+          (list (lambda () (setq routing-enabled t))))
+         (corrupt-contents "(setq gm/session-last-file \"truncated\"")
+         warning-text
+         flycheck-started
+         lsp-started)
+    (unwind-protect
+        (with-temp-buffer
+          (with-temp-file (desktop-full-file-name gm/session-directory)
+            (insert corrupt-contents))
+          (gm/lsp-deferred-if-available)
+          (should (memq #'gm/language-services-after-session-command
+                        post-command-hook))
+          (cl-letf (((symbol-function 'display-warning)
+                     (lambda (_type message &optional _level _buffer-name)
+                       (setq warning-text message))))
+            (should-not
+             (gm/session--read-with-recovery
+              (lambda (&rest _) (error "truncated desktop")))))
+          (let ((quarantined
+                 (directory-files gm/session-directory t
+                                  "\\`gm-desktop\\.el\\.corrupt-")))
+            (should (= (length quarantined) 1))
+            (should (equal (with-temp-buffer
+                             (insert-file-contents-literally (car quarantined))
+                             (buffer-string))
+                           corrupt-contents))
+            (should (string-match-p (regexp-quote (car quarantined))
+                                    warning-text)))
+          (should (file-exists-p (desktop-full-file-name gm/session-directory)))
+          (should (gm-test-readable-elisp-file-p
+                   (desktop-full-file-name gm/session-directory)))
+          (should desktop-save-mode)
+          (should gm/session-restored-p)
+          (should-not gm/session-restoring-p)
+          (should routing-enabled)
+          (should (string-match-p "truncated desktop" warning-text))
+          (cl-letf (((symbol-function 'flycheck-mode)
+                     (lambda (&optional _argument) (setq flycheck-started t)))
+                    ((symbol-function 'gm/lsp-start-for-current-buffer)
+                     (lambda () (setq lsp-started t))))
+            (gm/language-services-after-session-command))
+          (should flycheck-started)
+          (should lsp-started)
+          (should-not (memq #'gm/language-services-after-session-command
+                            post-command-hook)))
+      (desktop-save-mode -1)
+      (ignore-errors (desktop-release-lock gm/session-directory))
+      (delete-directory gm/session-directory t))))
+
+(ert-deftest gm-session-quarantine-failure-disables-saving-but-finishes ()
+  (let* ((gm/session-directory
+          (file-name-as-directory (make-temp-file "gm-session-quarantine-fail-" t)))
+         (desktop-dirname gm/session-directory)
+         (desktop-base-file-name "gm-desktop.el")
+         (desktop-base-lock-name "gm-desktop.lock")
+         (gm/session-restoring-p t)
+         (gm/session-restored-p nil)
+         (gm/session-last-file nil)
+         (gm/session-after-restore-hook nil)
+         mode-calls
+         warning-text)
+    (unwind-protect
+        (progn
+          (with-temp-file (desktop-full-file-name gm/session-directory)
+            (insert "broken"))
+          (cl-letf (((symbol-function 'desktop-save-mode)
+                     (lambda (argument) (push argument mode-calls)))
+                    ((symbol-function 'rename-file)
+                     (lambda (&rest _) (error "quarantine denied")))
+                    ((symbol-function 'display-warning)
+                     (lambda (_type message &optional _level _buffer-name)
+                       (setq warning-text message))))
+            (should-not
+             (gm/session--read-with-recovery
+              (lambda (&rest _) (error "unreadable desktop")))))
+          (should (equal mode-calls '(-1)))
+          (should (file-exists-p (desktop-full-file-name gm/session-directory)))
+          (should (string-match-p "quarantine denied" warning-text))
+          (should gm/session-restored-p)
+          (should-not gm/session-restoring-p))
+      (delete-directory gm/session-directory t))))
+
+(ert-deftest gm-session-fresh-save-failure-preserves-quarantine-and-finishes ()
+  (let* ((gm/session-directory
+          (file-name-as-directory (make-temp-file "gm-session-save-fail-" t)))
+         (desktop-dirname gm/session-directory)
+         (desktop-base-file-name "gm-desktop.el")
+         (desktop-base-lock-name "gm-desktop.lock")
+         (gm/session-restoring-p t)
+         (gm/session-restored-p nil)
+         (gm/session-last-file nil)
+         (gm/session-after-restore-hook nil)
+         mode-calls
+         warning-text)
+    (unwind-protect
+        (progn
+          (with-temp-file (desktop-full-file-name gm/session-directory)
+            (insert "broken"))
+          (cl-letf (((symbol-function 'desktop-save-mode)
+                     (lambda (argument) (push argument mode-calls)))
+                    ((symbol-function 'desktop-save)
+                     (lambda (&rest _) (error "fresh save denied")))
+                    ((symbol-function 'display-warning)
+                     (lambda (_type message &optional _level _buffer-name)
+                       (setq warning-text message))))
+            (should-not
+             (gm/session--read-with-recovery
+              (lambda (&rest _) (error "unreadable desktop")))))
+          (should (equal mode-calls '(-1)))
+          (should-not (file-exists-p
+                       (desktop-full-file-name gm/session-directory)))
+          (should (= (length (directory-files
+                              gm/session-directory t
+                              "\\`gm-desktop\\.el\\.corrupt-"))
+                     1))
+          (should (string-match-p "fresh save denied" warning-text))
+          (should gm/session-restored-p)
+          (should-not gm/session-restoring-p))
+      (delete-directory gm/session-directory t))))
+
+(ert-deftest gm-session-finish-clears-restoring-flag-when-hook-fails ()
+  (let ((gm/session-restoring-p t)
+        (gm/session-restored-p nil)
+        (gm/session-after-restore-hook
+         (list (lambda () (error "after-restore failure")))))
+    (should-error (gm/session--finish-restore)
+                  :type 'error)
+    (should gm/session-restored-p)
+    (should-not gm/session-restoring-p)
+    ;; Completion is idempotent and does not run the failing hook again.
+    (should-not (gm/session--finish-restore))))
+
+(ert-deftest gm-session-startup-failsafe-releases-incomplete-restore-once ()
+  (let* ((gm/session-restoring-p t)
+         (gm/session-restored-p nil)
+         (gm/session-last-file nil)
+         (finish-count 0)
+         (gm/session-after-restore-hook
+          (list (lambda () (setq finish-count (1+ finish-count)))))
+         warnings)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &optional _level _buffer-name)
+                 (push message warnings))))
+      (gm/session--startup-failsafe)
+      (gm/session--startup-failsafe))
+    (should (= finish-count 1))
+    (should (= (length warnings) 1))
+    (should gm/session-restored-p)
+    (should-not gm/session-restoring-p)))
+
+(ert-deftest gm-session-manual-desktop-read-errors-are-not-swallowed ()
+  (let ((gm/session-restoring-p nil)
+        (gm/session-restored-p t))
+    (should-error
+     (gm/session--read-with-recovery
+      (lambda (&rest _) (error "manual desktop failure")))
+     :type 'error)))
 
 (ert-deftest gm-session-surgically-removes-side-window-and-preserves-split ()
   (let ((file-a (make-temp-file "gm-session-window-a-"))
