@@ -16,6 +16,8 @@ fi
 
 GM_EMACS="${check_emacs}" "${check_repo_root}/test/run-session-smoke"
 
+GM_EMACS="${check_emacs}" "${check_repo_root}/test/run-java-startup-smoke"
+
 GM_EMACS_SKIP_PACKAGES=1 "${check_emacs}" --batch -Q \
   --eval "(setq user-emacs-directory \"${check_repo_root}/\")" \
   --eval "(progn (require 'package) (package-initialize))" \

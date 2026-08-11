@@ -112,12 +112,55 @@ The bootstrap never upgrades or unpins an installed JDK. This allows machines
 with older patch releases or additional JDKs to retain them while adding only
 missing managed Java 17 and Java 21 runtimes.
 
+After JDK setup, bootstrap runs `bin/discover-java-runtimes`. The command
+discovers registered macOS JDKs, stable Homebrew prefixes, and user-local
+archives; starts each candidate once to determine its actual major version; and
+writes the ignored machine-local registry at `var/java-runtimes.properties`.
+It never infers a version from a Homebrew formula name, so a generic or stale
+alias is recorded under the major reported by its JVM. One preferred path is
+retained for every discovered major, including unmanaged installations.
+
+The registry also assigns logical roles:
+
+```properties
+EMACS_JDK=JDK21
+JDTLS_JDK=JDK21
+METALS_JDK=JDK17
+GROOVY_LS_JDK=JDK21
+```
+
+Refresh it after installing, removing, or relocating a JDK. Existing valid role
+choices are preserved, replacement is atomic, and the prior registry receives
+a timestamped adjacent backup:
+
+```bash
+./bin/discover-java-runtimes --dry-run
+./bin/discover-java-runtimes
+./bin/discover-java-runtimes --check
+```
+
+Emacs and the Metals and Groovy wrappers parse this file as strict, inert
+`KEY=VALUE` data; it is never sourced or evaluated. Normal Emacs startup only
+checks the recorded executable paths and does not launch a JVM. Live version
+checks are reserved for `--check`, `M-x gm/java-status`, and
+`M-x gm/health-check`. If the registry is missing or stale, Emacs still starts
+and emits one warning explaining how to regenerate it, while Java language
+services remain unavailable.
+
 Within Emacs:
 
 - `M-x gm/java-status` reports paths, versions, roles, and the project selection.
-- `M-x gm/java-use-version` selects 17, 18, or 21 for the current project and
+- `M-x gm/java-use-version` selects any discovered runtime for the current project and
   restarts its LSP workspace.
-- Gradle and Scala project toolchains override the fallback when declared.
+- Every discovered key (`JDK17`, `JDK18`, `JDK21`, and so on) is exported to
+  Emacs child processes and integrated terminals.
+- Gradle repositories may use
+  `org.gradle.java.installations.fromEnv=JDK17,JDK21` to discover those aliases.
+  Project toolchains and daemon JVM criteria remain authoritative; no
+  machine-specific path is written into project `gradle.properties`.
+
+See the Gradle documentation for [toolchains](https://docs.gradle.org/current/userguide/toolchains.html)
+and [daemon JVM selection](https://docs.gradle.org/current/userguide/gradle_daemon.html).
 
 ## Layout and shortcuts
 

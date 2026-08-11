@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fake_java_home="$(cd "$(dirname "$0")/.." && pwd)"
+fake_java_version="$(tr -d '\n' < "${fake_java_home}/release-version")"
+
+if [[ -f "${fake_java_home}/invocation-marker" ]]; then
+  fake_java_marker="$(tr -d '\n' < "${fake_java_home}/invocation-marker")"
+  printf '%s\n' "${fake_java_home}" >> "${fake_java_marker}"
+fi
+
+printf 'Property settings:\n    java.version = %s\n' "${fake_java_version}" >&2
+printf 'openjdk version "%s"\n' "${fake_java_version}" >&2
+
+if [[ -f "${fake_java_home}/exit-status" ]]; then
+  exit "$(tr -d '\n' < "${fake_java_home}/exit-status")"
+fi

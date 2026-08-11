@@ -3,7 +3,6 @@ set -euo pipefail
 
 groovy_ls_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 groovy_ls_revision="347d098a928707223ce44b52cc45174a6327a5f3"
-groovy_ls_java_home="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
 groovy_ls_install_dir="${groovy_ls_repo_root}/.cache/lsp"
 groovy_ls_jar="${groovy_ls_install_dir}/groovy-language-server-all.jar"
 groovy_ls_revision_file="${groovy_ls_install_dir}/groovy-language-server.revision"
@@ -15,6 +14,18 @@ if [[ "$#" -gt 0 ]]; then
     exit 2
   fi
   groovy_ls_dry_run=true
+fi
+
+if ! groovy_ls_java_home="$(
+  "${groovy_ls_repo_root}/bin/java-runtime-home" GROOVY_LS_JDK 2>/dev/null
+)"; then
+  if [[ "${groovy_ls_dry_run}" == true ]]; then
+    echo "DRY RUN: Java runtime registry is missing or incomplete; bootstrap would generate it first."
+    echo "DRY RUN: no Groovy Language Server files were changed."
+    exit 0
+  fi
+  echo "Cannot resolve GROOVY_LS_JDK; run bin/discover-java-runtimes." >&2
+  exit 1
 fi
 
 if [[ ! -x "${groovy_ls_java_home}/bin/java" ]]; then

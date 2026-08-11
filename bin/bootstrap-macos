@@ -90,6 +90,7 @@ if [[ "${bootstrap_dry_run}" == true ]]; then
   done < <(awk '/^(tap|brew|cask) /' "${bootstrap_repo_root}/Brewfile")
 
   "${bootstrap_repo_root}/bin/stabilize-jdk21-shell-paths" --dry-run
+  "${bootstrap_repo_root}/bin/discover-java-runtimes" --dry-run
   "${bootstrap_repo_root}/bin/install-groovy-language-server" --dry-run
   echo "WOULD INSTALL/VERIFY: Node 24 language servers from tools/package-lock.json"
   echo "WOULD INSTALL/VERIFY: Metals 1.6.8 under ${bootstrap_repo_root}/.local/bin"
@@ -154,6 +155,9 @@ while IFS= read -r bootstrap_jdk_line; do
 done < "${bootstrap_baseline_dir}/homebrew-jdks.txt"
 
 "${bootstrap_repo_root}/bin/stabilize-jdk21-shell-paths"
+
+"${bootstrap_repo_root}/bin/discover-java-runtimes"
+"${bootstrap_repo_root}/bin/discover-java-runtimes" --check
 
 "${bootstrap_repo_root}/bin/install-groovy-language-server"
 

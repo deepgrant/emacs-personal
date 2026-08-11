@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+java_startup_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+java_startup_emacs="${GM_EMACS:-/opt/homebrew/opt/emacs-plus@30/Emacs.app/Contents/MacOS/Emacs}"
+java_startup_tmp="$(mktemp -d)"
+trap 'rm -rf "${java_startup_tmp}"' EXIT
+
+java_startup_marker="${java_startup_tmp}/java-invocations"
+java_startup_registry="${java_startup_tmp}/java-runtimes.properties"
+touch "${java_startup_marker}"
+
+java_startup_make_jdk() {
+  java_startup_home="$1"
+  java_startup_version="$2"
+  mkdir -p "${java_startup_home}/bin"
+  cp "${java_startup_repo_root}/test/fake-java-runtime" \
+    "${java_startup_home}/bin/java"
+  chmod +x "${java_startup_home}/bin/java"
+  printf '%s\n' "${java_startup_version}" > "${java_startup_home}/release-version"
+  printf '%s\n' "${java_startup_marker}" > "${java_startup_home}/invocation-marker"
+}
+
+java_startup_jdk17="${java_startup_tmp}/jdk17"
+java_startup_jdk18="${java_startup_tmp}/jdk18"
+java_startup_jdk21="${java_startup_tmp}/jdk21"
+java_startup_make_jdk "${java_startup_jdk17}" 17.0.12
+java_startup_make_jdk "${java_startup_jdk18}" 18.0.2
+java_startup_make_jdk "${java_startup_jdk21}" 21.0.10
+
+{
+  echo 'REGISTRY_VERSION=1'
+  printf 'JDK17=%s\n' "${java_startup_jdk17}"
+  printf 'JDK18=%s\n' "${java_startup_jdk18}"
+  printf 'JDK21=%s\n' "${java_startup_jdk21}"
+  echo 'EMACS_JDK=JDK21'
+  echo 'JDTLS_JDK=JDK21'
+  echo 'METALS_JDK=JDK17'
+  echo 'GROOVY_LS_JDK=JDK21'
+} > "${java_startup_registry}"
+
+GM_EMACS_SKIP_PACKAGES=1 \
+GM_JAVA_REGISTRY_FILE="${java_startup_registry}" \
+  "${java_startup_emacs}" --batch -Q \
+  --eval "(setq user-emacs-directory \"${java_startup_repo_root}/\")" \
+  -l "${java_startup_repo_root}/early-init.el" \
+  -l "${java_startup_repo_root}/init.el" \
+  --eval "(unless (and (equal (getenv \"JAVA_HOME\") \"${java_startup_jdk21}\") (equal (getenv \"JDK17\") \"${java_startup_jdk17}\") (equal lsp-metals-java-home \"${java_startup_jdk17}\")) (error \"Java registry was not applied during startup\"))"
+
+if [[ -s "${java_startup_marker}" ]]; then
+  echo "Emacs startup launched a JVM:" >&2
+  sed 's/^/  /' "${java_startup_marker}" >&2
+  exit 1
+fi
+
+echo "Zero-JVM Java startup smoke test passed."

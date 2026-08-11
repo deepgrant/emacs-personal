@@ -75,6 +75,45 @@
         t)
     (error nil)))
 
+(defun gm-test-create-java-home (directory version &optional marker)
+  "Create a fake Java home at DIRECTORY reporting VERSION."
+  (let ((java (expand-file-name "bin/java" directory)))
+    (make-directory (file-name-directory java) t)
+    (copy-file (expand-file-name "test/fake-java-runtime" gm/config-root)
+               java t)
+    (set-file-modes java #o755)
+    (with-temp-file (expand-file-name "release-version" directory)
+      (insert (format "%s\n" version)))
+    (when marker
+      (with-temp-file (expand-file-name "invocation-marker" directory)
+        (insert marker "\n")))
+    directory))
+
+(defun gm-test-write-java-registry (file entries)
+  "Write Java registry FILE from ENTRIES."
+  (make-directory (file-name-directory file) t)
+  (with-temp-file file
+    (insert "REGISTRY_VERSION=1\n")
+    (dolist (entry entries)
+      (insert (car entry) "=" (cdr entry) "\n"))))
+
+(defmacro gm-test-with-java-registry (entries &rest body)
+  "Run BODY with an isolated Java registry containing ENTRIES."
+  (declare (indent 1) (debug t))
+  `(let* ((java-test-root (make-temp-file "gm-java-registry-" t))
+          (gm/java-registry-file
+           (expand-file-name "java-runtimes.properties" java-test-root))
+          (gm/java--registry-cache 'uninitialized)
+          (gm/java--registry-modtime nil)
+          (gm/java--registry-warning-issued-p nil)
+          (process-environment (copy-sequence process-environment))
+          (exec-path (copy-sequence exec-path)))
+     (unwind-protect
+         (progn
+           (gm-test-write-java-registry gm/java-registry-file ,entries)
+           ,@body)
+       (delete-directory java-test-root t))))
+
 (ert-deftest gm-theme-loads ()
   (load-theme 'gm-cursor-dark t)
   (should (custom-theme-enabled-p 'gm-cursor-dark)))
@@ -99,6 +138,106 @@
     (when (gm/java-home 21)
       (should (seq-some (lambda (runtime) (plist-get runtime :default)) runtimes)))))
 
+(ert-deftest gm-java-registry-lookup-and-initialize-launch-no-jvms ()
+  (let* ((root (make-temp-file "gm-java-homes-" t))
+         (marker (expand-file-name "invocations" root))
+         (jdk17 (gm-test-create-java-home
+                 (expand-file-name "jdk17" root) "17.0.12" marker))
+         (jdk21 (gm-test-create-java-home
+                 (expand-file-name "jdk21" root) "21.0.10" marker)))
+    (unwind-protect
+        (gm-test-with-java-registry
+            `(("JDK17" . ,jdk17)
+              ("JDK21" . ,jdk21)
+              ("EMACS_JDK" . "JDK21")
+              ("JDTLS_JDK" . "JDK21")
+              ("METALS_JDK" . "JDK17")
+              ("GROOVY_LS_JDK" . "JDK21"))
+          (cl-letf (((symbol-function 'call-process)
+                     (lambda (&rest _)
+                       (ert-fail "Registry lookup launched a process"))))
+            (should (equal (gm/java-versions) '(17 21)))
+            (should (equal (gm/java-home 17) jdk17))
+            (should (equal (gm/java-role-home "METALS_JDK") jdk17))
+            (gm/java-initialize)
+            (should (equal (getenv "JDK17") jdk17))
+            (should (equal (getenv "JDK21") jdk21))
+            (should (equal (getenv "JAVA_HOME") jdk21))))
+      (delete-directory root t))))
+
+(ert-deftest gm-java-registry-rejects-unsafe-or-incomplete-input ()
+  (let* ((root (make-temp-file "gm-java-invalid-" t))
+         (file (expand-file-name "registry.properties" root))
+         (jdk17 (gm-test-create-java-home
+                 (expand-file-name "jdk17" root) "17.0.12")))
+    (unwind-protect
+        (dolist
+            (contents
+             (list
+              "REGISTRY_VERSION=1\nJDK17=\nJDK17=/duplicate\n"
+              "REGISTRY_VERSION=1\nUNKNOWN=/tmp\n"
+              "REGISTRY_VERSION=1\nJDK17=relative/path\nEMACS_JDK=JDK17\nJDTLS_JDK=JDK17\nMETALS_JDK=JDK17\nGROOVY_LS_JDK=JDK17\n"
+              (format "REGISTRY_VERSION=1\nJDK17=%s\nEMACS_JDK=JDK99\nJDTLS_JDK=JDK17\nMETALS_JDK=JDK17\nGROOVY_LS_JDK=JDK17\n" jdk17)
+              "REGISTRY_VERSION=1\nJDK17=$(touch /tmp/nope)\n"))
+          (with-temp-file file (insert contents))
+          (should-error (gm/java--parse-registry file)))
+      (delete-directory root t))))
+
+(ert-deftest gm-java-live-validation-distinguishes-failure-and-mismatch ()
+  (let* ((root (make-temp-file "gm-java-probe-" t))
+         (marker (expand-file-name "invocations" root))
+         (home (gm-test-create-java-home
+                (expand-file-name "jdk17" root) "17.0.12" marker)))
+    (unwind-protect
+        (progn
+          (let ((probe (gm/java--probe-home
+                        (expand-file-name "missing" root) 17)))
+            (should-not (plist-get probe :ok))
+            (should (equal (plist-get probe :detail) "missing executable")))
+          (with-temp-file (expand-file-name "exit-status" home) (insert "9\n"))
+          (let ((probe (gm/java--probe-home home 17)))
+            (should-not (plist-get probe :ok))
+            (should (= (plist-get probe :status) 9))
+            (should (string-match-p "failed (exit 9)" (plist-get probe :detail))))
+          (delete-file (expand-file-name "exit-status" home))
+          (let ((probe (gm/java--probe-home home 21)))
+            (should-not (plist-get probe :ok))
+            (should (= (plist-get probe :status) 0))
+            (should (string-match-p "version mismatch" (plist-get probe :detail))))
+          (with-temp-buffer
+            (insert-file-contents marker)
+            (should (= (count-lines (point-min) (point-max)) 2))))
+      (delete-directory root t))))
+
+(ert-deftest gm-java-status-and-health-probe-each-runtime-once ()
+  (let* ((root (make-temp-file "gm-java-diagnostics-" t))
+         (marker (expand-file-name "invocations" root))
+         (jdk17 (gm-test-create-java-home
+                 (expand-file-name "jdk17" root) "17.0.12" marker))
+         (jdk21 (gm-test-create-java-home
+                 (expand-file-name "jdk21" root) "21.0.10" marker)))
+    (unwind-protect
+        (gm-test-with-java-registry
+            `(("JDK17" . ,jdk17)
+              ("JDK21" . ,jdk21)
+              ("EMACS_JDK" . "JDK21")
+              ("JDTLS_JDK" . "JDK21")
+              ("METALS_JDK" . "JDK17")
+              ("GROOVY_LS_JDK" . "JDK21"))
+          (with-temp-file marker)
+          (gm/java-status)
+          (with-temp-buffer
+            (insert-file-contents marker)
+            (should (= (count-lines (point-min) (point-max)) 2)))
+          (with-temp-file marker)
+          (cl-letf (((symbol-function 'gm/codex-capabilities)
+                     (lambda () '(t . "test"))))
+            (gm/health-check))
+          (with-temp-buffer
+            (insert-file-contents marker)
+            (should (= (count-lines (point-min) (point-max)) 2))))
+      (delete-directory root t))))
+
 (ert-deftest gm-metals-command-is-an-executable-path-not-a-list ()
   (let ((command (gm/metals-server-command)))
     (should (stringp command))
@@ -114,7 +253,8 @@
 (ert-deftest gm-metals-settings-precede-deferred-client-loading ()
   (should-not lsp-metals-multi-root)
   (should (equal lsp-metals-server-command (gm/metals-server-command)))
-  (should (equal lsp-metals-java-home (or (gm/java-home 17) ""))))
+  (should (equal lsp-metals-java-home
+                 (or (gm/java-role-home "METALS_JDK") ""))))
 
 (ert-deftest gm-groovy-server-uses-managed-jar-java-and-classpath ()
   (let ((command (gm/groovy-language-server-command)))

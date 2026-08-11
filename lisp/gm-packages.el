@@ -136,7 +136,7 @@
 ;; run.  In particular, the upstream default enables a multi-root client and
 ;; can make a file from one checkout reuse an unrelated repository's server.
 (setq lsp-metals-server-command (gm/metals-server-command)
-      lsp-metals-java-home (or (gm/java-home 17) "")
+      lsp-metals-java-home (or (gm/java-role-home "METALS_JDK") "")
       lsp-metals-multi-root nil)
 
 (dolist (command gm/metals-interactive-commands)
@@ -296,7 +296,8 @@
   :after lsp-mode
   :init
   (setq lsp-java-java-path
-        (when-let ((home (gm/java-home 21))) (expand-file-name "bin/java" home))
+        (when-let ((home (gm/java-role-home "JDTLS_JDK")))
+          (expand-file-name "bin/java" home))
         lsp-java-configuration-runtimes (gm/java-lsp-runtimes)))
 
 (use-package lsp-metals

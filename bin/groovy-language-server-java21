@@ -2,11 +2,11 @@
 set -euo pipefail
 
 groovy_ls_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-groovy_ls_java_home="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+groovy_ls_java_home="$("${groovy_ls_repo_root}/bin/java-runtime-home" GROOVY_LS_JDK)"
 groovy_ls_jar="${groovy_ls_repo_root}/.cache/lsp/groovy-language-server-all.jar"
 
 if [[ ! -x "${groovy_ls_java_home}/bin/java" ]]; then
-  echo "OpenJDK 21 is missing at ${groovy_ls_java_home}" >&2
+  echo "The configured Groovy Language Server JDK is missing at ${groovy_ls_java_home}" >&2
   exit 1
 fi
 if [[ ! -f "${groovy_ls_jar}" ]]; then
