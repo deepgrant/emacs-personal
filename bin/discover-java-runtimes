@@ -213,7 +213,7 @@ for java_discovery_home in "${java_discovery_candidates[@]}"; do
   fi
 done
 
-for java_discovery_required in 17 18 21; do
+for java_discovery_required in 17 21; do
   java_discovery_found=false
   for java_discovery_major in "${java_discovery_majors[@]}"; do
     [[ "${java_discovery_major}" != "${java_discovery_required}" ]] || \

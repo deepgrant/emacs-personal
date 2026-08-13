@@ -2,8 +2,6 @@
 set -euo pipefail
 
 bootstrap_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-bootstrap_jdk18_url="https://download.java.net/java/GA/jdk18.0.2/f6ad4b4450fd4d298113270ec84f30ee/9/GPL/openjdk-18.0.2_macos-aarch64_bin.tar.gz"
-bootstrap_jdk18_sha="1da591d9ab49c348d5a424975ae44ea940edf1c3b3b4456d0a3020758829799e"
 bootstrap_dry_run=false
 
 while [[ "$#" -gt 0 ]]; do
@@ -39,20 +37,6 @@ export HOMEBREW_BUNDLE_NO_UPGRADE=1
 if [[ "${bootstrap_dry_run}" == true ]]; then
   echo "DRY RUN: bootstrap inspection for ${bootstrap_repo_root}"
   "${bootstrap_repo_root}/bin/capture-install-baseline" --dry-run
-
-  bootstrap_jdk18_home="${HOME}/.local/share/jdks/jdk-18.0.2.jdk"
-  if [[ -x "${bootstrap_jdk18_home}/Contents/Home/bin/java" ]] && \
-     "${bootstrap_jdk18_home}/Contents/Home/bin/java" -version 2>&1 | \
-       head -n 1 | grep -q '"18\.0\.2'; then
-    echo "PRESERVE: verified OpenJDK 18 at ${bootstrap_jdk18_home}"
-  elif [[ -x /opt/homebrew/opt/openjdk/bin/java ]] && \
-       /opt/homebrew/opt/openjdk/bin/java -version 2>&1 | head -n 1 | grep -q '"18\.'; then
-    echo "WOULD COPY: Homebrew OpenJDK 18 to ${bootstrap_jdk18_home}"
-  else
-    echo "WOULD DOWNLOAD: verified OpenJDK 18.0.2+9 archive"
-    echo "  destination: ${bootstrap_jdk18_home}"
-    echo "  SHA-256: ${bootstrap_jdk18_sha}"
-  fi
 
   bootstrap_installed_formulae="$(brew list --formula --versions 2>/dev/null || true)"
   bootstrap_installed_taps="$(brew tap 2>/dev/null || true)"
@@ -104,28 +88,6 @@ if [[ "${bootstrap_dry_run}" == true ]]; then
 fi
 
 bootstrap_baseline_dir="$("${bootstrap_repo_root}/bin/capture-install-baseline")"
-
-# Preserve historical OpenJDK 18 independently because current Homebrew tools
-# require the generic openjdk formula to advance to its supported version.
-bootstrap_jdk18_parent="${HOME}/.local/share/jdks"
-bootstrap_jdk18_home="${bootstrap_jdk18_parent}/jdk-18.0.2.jdk"
-if [[ ! -x "${bootstrap_jdk18_home}/Contents/Home/bin/java" ]]; then
-  mkdir -p "${bootstrap_jdk18_parent}"
-  if [[ -x /opt/homebrew/opt/openjdk/bin/java ]] && \
-     /opt/homebrew/opt/openjdk/bin/java -version 2>&1 | head -n 1 | grep -q '"18\.'; then
-    ditto /opt/homebrew/opt/openjdk/libexec/openjdk.jdk "${bootstrap_jdk18_home}"
-  else
-    bootstrap_tmp="$(mktemp -d)"
-    trap 'rm -rf "${bootstrap_tmp}"' EXIT
-    curl -fL "${bootstrap_jdk18_url}" -o "${bootstrap_tmp}/openjdk18.tar.gz"
-    echo "${bootstrap_jdk18_sha}  ${bootstrap_tmp}/openjdk18.tar.gz" | shasum -a 256 -c -
-    tar -xzf "${bootstrap_tmp}/openjdk18.tar.gz" -C "${bootstrap_jdk18_parent}"
-  fi
-fi
-if ! "${bootstrap_jdk18_home}/Contents/Home/bin/java" -version 2>&1 | head -n 1 | grep -q '"18\.0\.2'; then
-  echo "Preserved OpenJDK 18 failed verification." >&2
-  exit 1
-fi
 
 brew tap d12frosted/emacs-plus
 brew tap coursier/formulas

@@ -98,15 +98,7 @@ directory printed by bootstrap.
 | Version | Purpose |
 |---|---|
 | OpenJDK 17 | Metals and Java 17 projects |
-| OpenJDK 18 | Legacy compilation and testing only |
 | OpenJDK 21 | Default Emacs runtime, JDT LS, Groovy, and fallback projects |
-
-Java 18 is an archived, non-LTS release. The bootstrap preserves the existing
-Homebrew 18.0.2 bundle independently under `~/.local/share/jdks`; if it is
-absent, it installs the official OpenJDK 18.0.2+9 archive after SHA-256
-verification. This separation allows current Homebrew tools to use their
-supported JDK without replacing Java 18. Java 18 is never the language-server
-default.
 
 The bootstrap never upgrades or unpins an installed JDK. This allows machines
 with older patch releases or additional JDKs to retain them while adding only
@@ -152,7 +144,7 @@ Within Emacs:
 - `M-x gm/java-status` reports paths, versions, roles, and the project selection.
 - `M-x gm/java-use-version` selects any discovered runtime for the current project and
   restarts its LSP workspace.
-- Every discovered key (`JDK17`, `JDK18`, `JDK21`, and so on) is exported to
+- Every discovered key (`JDK17`, `JDK21`, `JDK25`, and so on) is exported to
   Emacs child processes and integrated terminals.
 - Gradle repositories may use
   `org.gradle.java.installations.fromEnv=JDK17,JDK21` to discover those aliases.

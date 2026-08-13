@@ -22,16 +22,13 @@ java_startup_make_jdk() {
 }
 
 java_startup_jdk17="${java_startup_tmp}/jdk17"
-java_startup_jdk18="${java_startup_tmp}/jdk18"
 java_startup_jdk21="${java_startup_tmp}/jdk21"
 java_startup_make_jdk "${java_startup_jdk17}" 17.0.12
-java_startup_make_jdk "${java_startup_jdk18}" 18.0.2
 java_startup_make_jdk "${java_startup_jdk21}" 21.0.10
 
 {
   echo 'REGISTRY_VERSION=1'
   printf 'JDK17=%s\n' "${java_startup_jdk17}"
-  printf 'JDK18=%s\n' "${java_startup_jdk18}"
   printf 'JDK21=%s\n' "${java_startup_jdk21}"
   echo 'EMACS_JDK=JDK21'
   echo 'JDTLS_JDK=JDK21'

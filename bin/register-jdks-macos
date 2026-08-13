@@ -21,7 +21,6 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 jdk17_source="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk"
-jdk18_source="${HOME}/.local/share/jdks/jdk-18.0.2.jdk"
 jdk21_source="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk"
 
 if [[ "${jdk_dry_run}" == true ]]; then
@@ -29,7 +28,6 @@ if [[ "${jdk_dry_run}" == true ]]; then
   jdk_dry_run_blocked=false
   for jdk_entry in \
     "17:${jdk17_source}:/Library/Java/JavaVirtualMachines/openjdk-17.jdk" \
-    "18:${jdk18_source}:/Library/Java/JavaVirtualMachines/openjdk-18.jdk" \
     "21:${jdk21_source}:/Library/Java/JavaVirtualMachines/openjdk-21.jdk"; do
     jdk_version="${jdk_entry%%:*}"
     jdk_remainder="${jdk_entry#*:}"
@@ -74,7 +72,6 @@ fi
 
 for jdk_entry in \
   "17:${jdk17_source}:/Library/Java/JavaVirtualMachines/openjdk-17.jdk" \
-  "18:${jdk18_source}:/Library/Java/JavaVirtualMachines/openjdk-18.jdk" \
   "21:${jdk21_source}:/Library/Java/JavaVirtualMachines/openjdk-21.jdk"; do
   jdk_version="${jdk_entry%%:*}"
   jdk_remainder="${jdk_entry#*:}"
@@ -97,19 +94,17 @@ done
 
 if sudo -n true 2>/dev/null; then
   sudo ln -sfn "${jdk17_source}" /Library/Java/JavaVirtualMachines/openjdk-17.jdk
-  sudo ln -sfn "${jdk18_source}" /Library/Java/JavaVirtualMachines/openjdk-18.jdk
   sudo ln -sfn "${jdk21_source}" /Library/Java/JavaVirtualMachines/openjdk-21.jdk
 else
   osascript \
     -e 'on run argv' \
-    -e 'do shell script "/bin/ln -sfn " & quoted form of item 1 of argv & " /Library/Java/JavaVirtualMachines/openjdk-17.jdk && /bin/ln -sfn " & quoted form of item 2 of argv & " /Library/Java/JavaVirtualMachines/openjdk-18.jdk && /bin/ln -sfn " & quoted form of item 3 of argv & " /Library/Java/JavaVirtualMachines/openjdk-21.jdk" with administrator privileges' \
+    -e 'do shell script "/bin/ln -sfn " & quoted form of item 1 of argv & " /Library/Java/JavaVirtualMachines/openjdk-17.jdk && /bin/ln -sfn " & quoted form of item 2 of argv & " /Library/Java/JavaVirtualMachines/openjdk-21.jdk" with administrator privileges' \
     -e 'end run' \
-    -- "${jdk17_source}" "${jdk18_source}" "${jdk21_source}"
+    -- "${jdk17_source}" "${jdk21_source}"
 fi
 
 for jdk_entry in \
   "17:${jdk17_source}:/Library/Java/JavaVirtualMachines/openjdk-17.jdk" \
-  "18:${jdk18_source}:/Library/Java/JavaVirtualMachines/openjdk-18.jdk" \
   "21:${jdk21_source}:/Library/Java/JavaVirtualMachines/openjdk-21.jdk"; do
   jdk_version="${jdk_entry%%:*}"
   jdk_remainder="${jdk_entry#*:}"
