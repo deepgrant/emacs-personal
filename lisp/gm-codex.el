@@ -10,6 +10,7 @@
 (declare-function diff-hl-update "diff-hl")
 (declare-function magit-refresh-all "magit-mode")
 (declare-function magit-status "magit-status")
+(declare-function gm/workspace-current-root "gm-project")
 (declare-function treemacs-refresh "treemacs-interface")
 (declare-function vterm "vterm")
 (declare-function vterm-send-return "vterm")
@@ -83,8 +84,13 @@
 (defun gm/codex--canonical-root (&optional directory)
   "Return the canonical Git root containing DIRECTORY.
 Signal a user error when DIRECTORY is not in a Git worktree."
-  (let* ((default-directory (or directory default-directory))
-         (root (or (locate-dominating-file default-directory ".git")
+  (let* ((workspace-root
+          (and (null directory)
+               (fboundp 'gm/workspace-current-root)
+               (gm/workspace-current-root)))
+         (default-directory (or directory workspace-root default-directory))
+         (root (or workspace-root
+                   (locate-dominating-file default-directory ".git")
                    (when-let* ((project (project-current nil)))
                      (project-root project)))))
     (unless (and root (file-exists-p (expand-file-name ".git" root)))

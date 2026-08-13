@@ -58,9 +58,14 @@
                        (if (file-readable-p groovy-ls)
                            groovy-ls
                          "run bin/install-groovy-language-server")))
-    (dolist (version '(17 18 21))
-      (gm/health--line (format "OpenJDK %s" version) (gm/java-home version)
-                       (or (gm/java-home version) "missing")))
+    (gm/health--line "Java registry" (gm/java--registry)
+                     gm/java-registry-file)
+    (dolist (version (gm/java-versions))
+      (let* ((home (gm/java-home version))
+             (probe (gm/java--probe-home home version)))
+        (gm/health--line (format "OpenJDK %s" version)
+                         (plist-get probe :ok)
+                         (format "%s — %s" home (plist-get probe :detail)))))
     (dolist (program '("rg" "fd" "node" "npm" "basedpyright-langserver"
                        "typescript-language-server" "ngserver" "bash-language-server"
                        "yaml-language-server" "sourcekit-lsp" "gradle" "groovy"

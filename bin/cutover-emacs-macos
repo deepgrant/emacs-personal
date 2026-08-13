@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cutover_dry_run=false
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      cutover_dry_run=true
+      shift
+      ;;
+    *)
+      echo "Usage: $0 [--dry-run]" >&2
+      exit 2
+      ;;
+  esac
+done
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This command is only for macOS." >&2
   exit 1
@@ -26,6 +40,67 @@ cutover_move() {
   fi
 }
 
+cutover_old_version="missing"
+if [[ -e "${cutover_target_app}" ]]; then
+  if [[ -f "${cutover_target_app}/Contents/Info.plist" ]]; then
+    cutover_old_version="$(
+      "${cutover_plistbuddy}" -c 'Print :CFBundleShortVersionString' \
+        "${cutover_target_app}/Contents/Info.plist" 2>/dev/null || printf 'unreadable'
+    )"
+  else
+    cutover_old_version="unidentified"
+  fi
+fi
+
+if [[ "${cutover_dry_run}" == true ]]; then
+  echo "DRY RUN: Emacs application cutover inspection"
+  cutover_dry_run_blocked=false
+
+  if [[ -x "${cutover_binary}" ]]; then
+    cutover_new_version="$(
+      "${cutover_binary}" --batch -Q --eval '(princ emacs-version)'
+    )"
+    if [[ "${cutover_new_version}" == "30.2" ]]; then
+      echo "SOURCE OK: Emacs Plus ${cutover_new_version} at ${cutover_source_app}"
+    else
+      echo "BLOCKED: expected Emacs Plus 30.2, found ${cutover_new_version}." >&2
+      cutover_dry_run_blocked=true
+    fi
+  else
+    echo "WOULD REQUIRE: bootstrap to install Emacs Plus 30.2"
+  fi
+  if [[ ! -d "${cutover_source_client}" ]]; then
+    echo "WOULD REQUIRE: bootstrap to supply ${cutover_source_client}"
+  fi
+
+  case "${cutover_old_version}" in
+    missing)
+      echo "TARGET: ${cutover_target_app} is not installed"
+      ;;
+    26.1|29.3|30.2)
+      echo "TARGET OK: identified exact Emacs ${cutover_old_version}"
+      echo "WOULD BACK UP: ${cutover_target_app} to ~/.Trash with version and timestamp"
+      ;;
+    *)
+      echo "BLOCKED: ${cutover_target_app} is unexpected version ${cutover_old_version}." >&2
+      cutover_dry_run_blocked=true
+      ;;
+  esac
+  if [[ -e "${cutover_target_client}" ]]; then
+    echo "WOULD BACK UP: ${cutover_target_client} to ~/.Trash with timestamp"
+  fi
+  echo "WOULD LINK: Homebrew emacs and emacsclient commands without forced overwrite"
+  echo "WOULD STAGE/VERIFY: Emacs.app and Emacs Client.app as version 30.2"
+  echo "WOULD QUIT/VERIFY: running Emacs instances before application replacement"
+  echo "WOULD INSTALL/VERIFY/LAUNCH: Emacs Plus 30.2 under /Applications"
+  echo "PRESERVE: the existing Homebrew Emacs formula and all rollback applications."
+  echo "DRY RUN: no applications, links, processes, or files were changed."
+  if [[ "${cutover_dry_run_blocked}" == true ]]; then
+    exit 1
+  fi
+  exit 0
+fi
+
 if [[ ! -x "${cutover_binary}" ]]; then
   echo "Emacs Plus 30 is not installed; run bin/bootstrap-macos first." >&2
   exit 1
@@ -44,13 +119,10 @@ for cutover_source in "${cutover_source_app}" "${cutover_source_client}"; do
   fi
 done
 
-cutover_old_version="missing"
-if [[ -f "${cutover_target_app}/Contents/Info.plist" ]]; then
-  cutover_old_version="$("${cutover_plistbuddy}" -c 'Print :CFBundleShortVersionString' \
-    "${cutover_target_app}/Contents/Info.plist")"
-fi
-
-if [[ "${cutover_old_version}" != "missing" && "${cutover_old_version}" != "26.1" && "${cutover_old_version}" != "30.2" ]]; then
+if [[ "${cutover_old_version}" != "missing" && \
+      "${cutover_old_version}" != "26.1" && \
+      "${cutover_old_version}" != "29.3" && \
+      "${cutover_old_version}" != "30.2" ]]; then
   echo "Refusing cutover: /Applications/Emacs.app is unexpected version ${cutover_old_version}." >&2
   exit 1
 fi
@@ -82,6 +154,10 @@ if [[ "${cutover_old_version}" == "26.1" ]]; then
   cutover_backup="${HOME}/.Trash/Emacs-26.1-$(date +%Y%m%d-%H%M%S).app"
   cutover_move "${cutover_target_app}" "${cutover_backup}"
   echo "Moved Emacs 26.1 to ${cutover_backup}"
+elif [[ "${cutover_old_version}" == "29.3" ]]; then
+  cutover_backup="${HOME}/.Trash/Emacs-29.3-$(date +%Y%m%d-%H%M%S).app"
+  cutover_move "${cutover_target_app}" "${cutover_backup}"
+  echo "Moved Emacs 29.3 to ${cutover_backup}"
 elif [[ "${cutover_old_version}" == "30.2" ]]; then
   cutover_backup="${HOME}/.Trash/Emacs-30.2-previous-$(date +%Y%m%d-%H%M%S).app"
   cutover_move "${cutover_target_app}" "${cutover_backup}"

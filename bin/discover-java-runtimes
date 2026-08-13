@@ -1,0 +1,296 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+java_discovery_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+java_discovery_registry="${GM_JAVA_REGISTRY_FILE:-${java_discovery_repo_root}/var/java-runtimes.properties}"
+java_discovery_mode="write"
+java_discovery_atomic=""
+java_discovery_records=""
+java_discovery_output=""
+
+java_discovery_cleanup() {
+  [[ -z "${java_discovery_records}" ]] || rm -f "${java_discovery_records}"
+  [[ -z "${java_discovery_output}" ]] || rm -f "${java_discovery_output}"
+  [[ -z "${java_discovery_atomic}" ]] || rm -f "${java_discovery_atomic}"
+}
+trap java_discovery_cleanup EXIT
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --dry-run) java_discovery_mode=dry-run ;;
+    --check) java_discovery_mode=check ;;
+    *)
+      echo "Usage: $0 [--dry-run|--check]" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+java_discovery_probe() {
+  java_discovery_probe_home="$1"
+  java_discovery_probe_expected="${2:-}"
+  java_discovery_probe_output=""
+  java_discovery_probe_status=0
+  if java_discovery_probe_output="$(
+    "${java_discovery_probe_home}/bin/java" \
+      -XshowSettings:properties -version 2>&1
+  )"; then
+    java_discovery_probe_status=0
+  else
+    java_discovery_probe_status=$?
+  fi
+  java_discovery_probe_version="$(
+    awk -F= '/^[[:space:]]*java\.version[[:space:]]*=/{
+      value=$2; sub(/^[[:space:]]*/, "", value); print value; exit
+    }' <<< "${java_discovery_probe_output}"
+  )"
+  if [[ -z "${java_discovery_probe_version}" ]]; then
+    java_discovery_probe_version="$(
+      sed -nE 's/.*(java|openjdk) version "([^"]+)".*/\2/p' \
+        <<< "${java_discovery_probe_output}" | head -n 1
+    )"
+  fi
+  java_discovery_probe_major="${java_discovery_probe_version%%.*}"
+  if [[ "${java_discovery_probe_major}" == "1" ]]; then
+    java_discovery_probe_remainder="${java_discovery_probe_version#1.}"
+    java_discovery_probe_major="${java_discovery_probe_remainder%%.*}"
+  fi
+  java_discovery_probe_major="${java_discovery_probe_major%%-*}"
+  [[ "${java_discovery_probe_status}" -eq 0 ]] || return 1
+  [[ "${java_discovery_probe_major}" =~ ^[0-9]+$ ]] || return 1
+  [[ -z "${java_discovery_probe_expected}" || \
+     "${java_discovery_probe_major}" == "${java_discovery_probe_expected}" ]]
+}
+
+if [[ "${java_discovery_mode}" == check ]]; then
+  if [[ ! -f "${java_discovery_registry}" ]]; then
+    echo "Java runtime registry is missing: ${java_discovery_registry}" >&2
+    exit 1
+  fi
+  for java_discovery_role in EMACS_JDK JDTLS_JDK METALS_JDK GROOVY_LS_JDK; do
+    GM_JAVA_REGISTRY_FILE="${java_discovery_registry}" \
+      "${java_discovery_repo_root}/bin/java-runtime-home" \
+      "${java_discovery_role}" >/dev/null
+  done
+  while IFS='=' read -r java_discovery_key java_discovery_home; do
+    [[ "${java_discovery_key}" =~ ^JDK[0-9]+$ ]] || continue
+    java_discovery_expected="${java_discovery_key#JDK}"
+    if ! java_discovery_probe "${java_discovery_home}" "${java_discovery_expected}"; then
+      if [[ "${java_discovery_probe_status}" -ne 0 ]]; then
+        echo "${java_discovery_key} failed live validation at ${java_discovery_home}: Java exited ${java_discovery_probe_status}" >&2
+      elif [[ ! "${java_discovery_probe_major}" =~ ^[0-9]+$ ]]; then
+        echo "${java_discovery_key} failed live validation at ${java_discovery_home}: no Java major was reported" >&2
+      else
+        echo "${java_discovery_key} version mismatch at ${java_discovery_home}: expected ${java_discovery_expected}, reported ${java_discovery_probe_major}" >&2
+      fi
+      exit 1
+    fi
+    echo "VALID: ${java_discovery_key}=${java_discovery_home} (${java_discovery_probe_version})"
+  done < "${java_discovery_registry}"
+  echo "Java runtime registry is valid: ${java_discovery_registry}"
+  exit 0
+fi
+
+# macOS ships Bash 3.2, whose nounset handling rejects expansion of a truly
+# empty array.  A skipped sentinel keeps every indexed array portable.
+java_discovery_candidates=("")
+java_discovery_seen_candidates=("")
+java_discovery_physical_homes=("")
+java_discovery_physical_majors=("")
+java_discovery_majors=("")
+java_discovery_homes=("")
+java_discovery_ranks=("")
+
+java_discovery_add_candidate() {
+  java_discovery_candidate="$1"
+  [[ -n "${java_discovery_candidate}" ]] || return 0
+  if [[ -x "${java_discovery_candidate}/libexec/openjdk.jdk/Contents/Home/bin/java" ]]; then
+    java_discovery_home="${java_discovery_candidate}/libexec/openjdk.jdk/Contents/Home"
+  elif [[ -x "${java_discovery_candidate}/Contents/Home/bin/java" ]]; then
+    java_discovery_home="${java_discovery_candidate}/Contents/Home"
+  elif [[ -x "${java_discovery_candidate}/bin/java" ]]; then
+    java_discovery_home="${java_discovery_candidate}"
+  else
+    return 0
+  fi
+  for java_discovery_seen in "${java_discovery_seen_candidates[@]}"; do
+    [[ "${java_discovery_seen}" != "${java_discovery_home}" ]] || return 0
+  done
+  java_discovery_seen_candidates+=("${java_discovery_home}")
+  java_discovery_candidates+=("${java_discovery_home}")
+}
+
+if [[ -n "${GM_JAVA_DISCOVERY_CANDIDATES:-}" ]]; then
+  while IFS= read -r java_discovery_candidate; do
+    java_discovery_add_candidate "${java_discovery_candidate}"
+  done <<< "${GM_JAVA_DISCOVERY_CANDIDATES}"
+fi
+
+if [[ "${GM_JAVA_DISABLE_SYSTEM_DISCOVERY:-0}" != "1" ]]; then
+  if command -v brew >/dev/null 2>&1; then
+    java_discovery_brew_prefix="$(brew --prefix)"
+    for java_discovery_candidate in "${java_discovery_brew_prefix}"/opt/openjdk@*; do
+      [[ -e "${java_discovery_candidate}" ]] || continue
+      java_discovery_add_candidate "${java_discovery_candidate}"
+    done
+  else
+    java_discovery_brew_prefix="/opt/homebrew"
+  fi
+  for java_discovery_candidate in \
+    "${HOME}"/.local/share/jdks/*.jdk \
+    "${HOME}"/.local/share/jdks/*/Contents/Home \
+    /Library/Java/JavaVirtualMachines/*.jdk; do
+    [[ -e "${java_discovery_candidate}" ]] || continue
+    java_discovery_add_candidate "${java_discovery_candidate}"
+  done
+  if [[ -x /usr/libexec/java_home ]]; then
+    while IFS= read -r java_discovery_candidate; do
+      java_discovery_add_candidate "${java_discovery_candidate}"
+    done < <(
+      /usr/libexec/java_home -V 2>&1 | \
+        sed -nE 's@^.* (/.*Contents/Home)$@\1@p'
+    )
+  fi
+  java_discovery_add_candidate "${java_discovery_brew_prefix}/opt/openjdk"
+fi
+
+java_discovery_rank() {
+  java_discovery_rank_home="$1"
+  java_discovery_rank_major="$2"
+  case "${java_discovery_rank_home}" in
+    */opt/openjdk@"${java_discovery_rank_major}"/libexec/openjdk.jdk/Contents/Home) echo 10 ;;
+    "${HOME}"/.local/share/jdks/*) echo 20 ;;
+    /Library/Java/JavaVirtualMachines/*) echo 30 ;;
+    */opt/openjdk/libexec/openjdk.jdk/Contents/Home) echo 40 ;;
+    */opt/openjdk@*/libexec/openjdk.jdk/Contents/Home) echo 45 ;;
+    *) echo 50 ;;
+  esac
+}
+
+for java_discovery_home in "${java_discovery_candidates[@]}"; do
+  [[ -n "${java_discovery_home}" ]] || continue
+  java_discovery_physical="$(cd "${java_discovery_home}" && pwd -P)"
+  java_discovery_known_major=""
+  for java_discovery_index in "${!java_discovery_physical_homes[@]}"; do
+    if [[ "${java_discovery_physical_homes[${java_discovery_index}]}" == \
+          "${java_discovery_physical}" ]]; then
+      java_discovery_known_major="${java_discovery_physical_majors[${java_discovery_index}]}"
+      break
+    fi
+  done
+  if [[ -n "${java_discovery_known_major}" ]]; then
+    java_discovery_major="${java_discovery_known_major}"
+  else
+    if ! java_discovery_probe "${java_discovery_home}"; then
+      echo "Ignoring invalid Java candidate: ${java_discovery_home}" >&2
+      continue
+    fi
+    java_discovery_major="${java_discovery_probe_major}"
+    java_discovery_physical_homes+=("${java_discovery_physical}")
+    java_discovery_physical_majors+=("${java_discovery_major}")
+  fi
+  java_discovery_candidate_rank="$(
+    java_discovery_rank "${java_discovery_home}" "${java_discovery_major}"
+  )"
+  java_discovery_found=false
+  for java_discovery_index in "${!java_discovery_majors[@]}"; do
+    if [[ "${java_discovery_majors[${java_discovery_index}]}" == \
+          "${java_discovery_major}" ]]; then
+      java_discovery_found=true
+      if [[ "${java_discovery_candidate_rank}" -lt \
+            "${java_discovery_ranks[${java_discovery_index}]}" ]]; then
+        java_discovery_homes[java_discovery_index]="${java_discovery_home}"
+        java_discovery_ranks[java_discovery_index]="${java_discovery_candidate_rank}"
+      fi
+      break
+    fi
+  done
+  if [[ "${java_discovery_found}" == false ]]; then
+    java_discovery_majors+=("${java_discovery_major}")
+    java_discovery_homes+=("${java_discovery_home}")
+    java_discovery_ranks+=("${java_discovery_candidate_rank}")
+  fi
+done
+
+for java_discovery_required in 17 21; do
+  java_discovery_found=false
+  for java_discovery_major in "${java_discovery_majors[@]}"; do
+    [[ "${java_discovery_major}" != "${java_discovery_required}" ]] || \
+      java_discovery_found=true
+  done
+  if [[ "${java_discovery_found}" == false ]]; then
+    echo "Required JDK ${java_discovery_required} was not discovered." >&2
+    [[ "${java_discovery_mode}" == dry-run ]] || exit 1
+  fi
+done
+
+java_discovery_role_value() {
+  java_discovery_role="$1"
+  java_discovery_default="$2"
+  java_discovery_existing=""
+  if [[ -f "${java_discovery_registry}" ]]; then
+    java_discovery_existing="$(
+      awk -F= -v key="${java_discovery_role}" \
+        '$1 == key {print substr($0, index($0, "=") + 1); exit}' \
+        "${java_discovery_registry}"
+    )"
+  fi
+  if [[ "${java_discovery_existing}" =~ ^JDK[0-9]+$ ]]; then
+    for java_discovery_major in "${java_discovery_majors[@]}"; do
+      if [[ "JDK${java_discovery_major}" == "${java_discovery_existing}" ]]; then
+        printf '%s\n' "${java_discovery_existing}"
+        return
+      fi
+    done
+  fi
+  printf '%s\n' "${java_discovery_default}"
+}
+
+java_discovery_records="$(mktemp)"
+java_discovery_output="$(mktemp)"
+for java_discovery_index in "${!java_discovery_majors[@]}"; do
+  [[ -n "${java_discovery_majors[${java_discovery_index}]}" ]] || continue
+  printf '%s\t%s\n' \
+    "${java_discovery_majors[${java_discovery_index}]}" \
+    "${java_discovery_homes[${java_discovery_index}]}" \
+    >> "${java_discovery_records}"
+done
+
+{
+  echo "# Generated by bin/discover-java-runtimes; machine-local and ignored by Git."
+  echo "REGISTRY_VERSION=1"
+  sort -n -k1,1 "${java_discovery_records}" | \
+    while IFS=$'\t' read -r java_discovery_major java_discovery_home; do
+      printf 'JDK%s=%s\n' "${java_discovery_major}" "${java_discovery_home}"
+    done
+  echo
+  printf 'EMACS_JDK=%s\n' "$(java_discovery_role_value EMACS_JDK JDK21)"
+  printf 'JDTLS_JDK=%s\n' "$(java_discovery_role_value JDTLS_JDK JDK21)"
+  printf 'METALS_JDK=%s\n' "$(java_discovery_role_value METALS_JDK JDK17)"
+  printf 'GROOVY_LS_JDK=%s\n' "$(java_discovery_role_value GROOVY_LS_JDK JDK21)"
+} > "${java_discovery_output}"
+
+if [[ "${java_discovery_mode}" == dry-run ]]; then
+  echo "DRY RUN: Java runtime registry would contain:"
+  cat "${java_discovery_output}"
+  echo "DRY RUN: ${java_discovery_registry} was not changed."
+  exit 0
+fi
+
+mkdir -p "$(dirname "${java_discovery_registry}")"
+if [[ -f "${java_discovery_registry}" ]]; then
+  java_discovery_backup="${java_discovery_registry}.gm-emacs-$(date +%Y%m%d-%H%M%S)-$$.bak"
+  cp -p "${java_discovery_registry}" "${java_discovery_backup}"
+  echo "Preserved previous Java runtime registry at ${java_discovery_backup}"
+fi
+java_discovery_atomic="$(mktemp "$(dirname "${java_discovery_registry}")/.java-runtimes.XXXXXX")"
+cp "${java_discovery_output}" "${java_discovery_atomic}"
+for java_discovery_role in EMACS_JDK JDTLS_JDK METALS_JDK GROOVY_LS_JDK; do
+  GM_JAVA_REGISTRY_FILE="${java_discovery_atomic}" \
+    "${java_discovery_repo_root}/bin/java-runtime-home" \
+    "${java_discovery_role}" >/dev/null
+done
+mv "${java_discovery_atomic}" "${java_discovery_registry}"
+java_discovery_atomic=""
+echo "Generated Java runtime registry at ${java_discovery_registry}"

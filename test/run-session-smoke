@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+session_test_root="$(cd "$(dirname "$0")/.." && pwd)"
+session_test_emacs="${GM_EMACS:-/opt/homebrew/opt/emacs-plus@30/Emacs.app/Contents/MacOS/Emacs}"
+session_test_state="$(mktemp -d "${TMPDIR:-/tmp}/gm-emacs-session.XXXXXX")"
+
+cleanup() {
+  rm -rf -- "${session_test_state}"
+}
+trap cleanup EXIT
+
+if [[ ! -x "${session_test_emacs}" ]] && ! command -v "${session_test_emacs}" >/dev/null 2>&1; then
+  echo "Emacs executable not found: ${session_test_emacs}" >&2
+  exit 1
+fi
+
+for session_test_phase in save restore corrupt recover restore-recovered; do
+  GM_SESSION_SMOKE_ROOT="${session_test_state}" \
+  GM_SESSION_SMOKE_PHASE="${session_test_phase}" \
+  "${session_test_emacs}" --batch -Q \
+    -l "${session_test_root}/test/session-smoke.el"
+done
+
+echo "Desktop session round-trip and corrupt recovery passed."

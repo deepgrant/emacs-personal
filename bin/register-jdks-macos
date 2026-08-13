@@ -1,32 +1,119 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+jdk_dry_run=false
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      jdk_dry_run=true
+      shift
+      ;;
+    *)
+      echo "Usage: $0 [--dry-run]" >&2
+      exit 2
+      ;;
+  esac
+done
+
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "This command is only for macOS." >&2
   exit 1
 fi
 
 jdk17_source="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk"
-jdk18_source="${HOME}/.local/share/jdks/jdk-18.0.2.jdk"
 jdk21_source="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk"
 
-for jdk_source in "${jdk17_source}" "${jdk18_source}" "${jdk21_source}"; do
+if [[ "${jdk_dry_run}" == true ]]; then
+  echo "DRY RUN: JDK registration inspection"
+  jdk_dry_run_blocked=false
+  for jdk_entry in \
+    "17:${jdk17_source}:/Library/Java/JavaVirtualMachines/openjdk-17.jdk" \
+    "21:${jdk21_source}:/Library/Java/JavaVirtualMachines/openjdk-21.jdk"; do
+    jdk_version="${jdk_entry%%:*}"
+    jdk_remainder="${jdk_entry#*:}"
+    jdk_source="${jdk_remainder%%:*}"
+    jdk_target="${jdk_remainder#*:}"
+
+    if [[ -x "${jdk_source}/Contents/Home/bin/java" ]]; then
+      jdk_detected_version="$(
+        "${jdk_source}/Contents/Home/bin/java" -version 2>&1 | head -n 1
+      )"
+      if grep -Eq "version \"${jdk_version}(\\.|\")" <<< "${jdk_detected_version}"; then
+        echo "SOURCE OK: JDK ${jdk_version} at ${jdk_source} (${jdk_detected_version})"
+      else
+        echo "BLOCKED: JDK ${jdk_version} source has unexpected version: ${jdk_detected_version}" >&2
+        jdk_dry_run_blocked=true
+      fi
+    else
+      echo "WOULD REQUIRE: bootstrap to supply JDK ${jdk_version} at ${jdk_source}"
+    fi
+
+    if [[ -L "${jdk_target}" ]]; then
+      jdk_current_target="$(readlink "${jdk_target}")"
+      if [[ "${jdk_current_target}" == "${jdk_source}" ]]; then
+        echo "PRESERVE: ${jdk_target} -> ${jdk_source}"
+      else
+        echo "WOULD UPDATE: ${jdk_target} -> ${jdk_source} (currently -> ${jdk_current_target})"
+      fi
+    elif [[ -e "${jdk_target}" ]]; then
+      echo "BLOCKED: refusing to replace non-symlink ${jdk_target}" >&2
+      jdk_dry_run_blocked=true
+    else
+      echo "WOULD CREATE: ${jdk_target} -> ${jdk_source}"
+    fi
+  done
+  echo "PRESERVE: all other installed JDKs and registrations remain untouched."
+  echo "DRY RUN: no privileges were requested and no registrations were changed."
+  if [[ "${jdk_dry_run_blocked}" == true ]]; then
+    exit 1
+  fi
+  exit 0
+fi
+
+for jdk_entry in \
+  "17:${jdk17_source}:/Library/Java/JavaVirtualMachines/openjdk-17.jdk" \
+  "21:${jdk21_source}:/Library/Java/JavaVirtualMachines/openjdk-21.jdk"; do
+  jdk_version="${jdk_entry%%:*}"
+  jdk_remainder="${jdk_entry#*:}"
+  jdk_source="${jdk_remainder%%:*}"
+  jdk_target="${jdk_remainder#*:}"
   if [[ ! -x "${jdk_source}/Contents/Home/bin/java" ]]; then
     echo "Missing JDK bundle: ${jdk_source}" >&2
+    exit 1
+  fi
+  if ! "${jdk_source}/Contents/Home/bin/java" -version 2>&1 | \
+       head -n 1 | grep -Eq "version \"${jdk_version}(\\.|\")"; then
+    echo "JDK ${jdk_version} source failed version verification: ${jdk_source}" >&2
+    exit 1
+  fi
+  if [[ -e "${jdk_target}" && ! -L "${jdk_target}" ]]; then
+    echo "Refusing to replace non-symlink JDK registration: ${jdk_target}" >&2
     exit 1
   fi
 done
 
 if sudo -n true 2>/dev/null; then
   sudo ln -sfn "${jdk17_source}" /Library/Java/JavaVirtualMachines/openjdk-17.jdk
-  sudo ln -sfn "${jdk18_source}" /Library/Java/JavaVirtualMachines/openjdk-18.jdk
   sudo ln -sfn "${jdk21_source}" /Library/Java/JavaVirtualMachines/openjdk-21.jdk
 else
   osascript \
     -e 'on run argv' \
-    -e 'do shell script "/bin/ln -sfn " & quoted form of item 1 of argv & " /Library/Java/JavaVirtualMachines/openjdk-17.jdk && /bin/ln -sfn " & quoted form of item 2 of argv & " /Library/Java/JavaVirtualMachines/openjdk-18.jdk && /bin/ln -sfn " & quoted form of item 3 of argv & " /Library/Java/JavaVirtualMachines/openjdk-21.jdk" with administrator privileges' \
+    -e 'do shell script "/bin/ln -sfn " & quoted form of item 1 of argv & " /Library/Java/JavaVirtualMachines/openjdk-17.jdk && /bin/ln -sfn " & quoted form of item 2 of argv & " /Library/Java/JavaVirtualMachines/openjdk-21.jdk" with administrator privileges' \
     -e 'end run' \
-    -- "${jdk17_source}" "${jdk18_source}" "${jdk21_source}"
+    -- "${jdk17_source}" "${jdk21_source}"
 fi
+
+for jdk_entry in \
+  "17:${jdk17_source}:/Library/Java/JavaVirtualMachines/openjdk-17.jdk" \
+  "21:${jdk21_source}:/Library/Java/JavaVirtualMachines/openjdk-21.jdk"; do
+  jdk_version="${jdk_entry%%:*}"
+  jdk_remainder="${jdk_entry#*:}"
+  jdk_source="${jdk_remainder%%:*}"
+  jdk_target="${jdk_remainder#*:}"
+  if [[ ! -L "${jdk_target}" || "$(readlink "${jdk_target}")" != "${jdk_source}" ]]; then
+    echo "JDK ${jdk_version} registration failed: ${jdk_target}" >&2
+    exit 1
+  fi
+done
 
 /usr/libexec/java_home -V 2>&1

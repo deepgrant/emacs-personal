@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+install_test_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+install_test_tmp="$(mktemp -d)"
+trap 'rm -rf "${install_test_tmp}"' EXIT
+
+install_test_home="${install_test_tmp}/home"
+install_test_source="${install_test_tmp}/source"
+install_test_baselines="${install_test_tmp}/baselines"
+mkdir -p "${install_test_home}" "${install_test_source}/elpa" "${install_test_source}/var"
+
+install_test_make_jdk() {
+  install_test_jdk_home="$1"
+  install_test_jdk_version="$2"
+  install_test_jdk_marker="$3"
+  mkdir -p "${install_test_jdk_home}/bin"
+  cp "${install_test_repo_root}/test/fake-java-runtime" \
+    "${install_test_jdk_home}/bin/java"
+  chmod +x "${install_test_jdk_home}/bin/java"
+  printf '%s\n' "${install_test_jdk_version}" \
+    > "${install_test_jdk_home}/release-version"
+  printf '%s\n' "${install_test_jdk_marker}" \
+    > "${install_test_jdk_home}/invocation-marker"
+}
+
+for install_test_script in "${install_test_repo_root}"/bin/* \
+                           "${install_test_repo_root}/test/run-install-script-tests"; do
+  bash -n "${install_test_script}"
+done
+
+install_test_old_jdk21="/opt/homebrew/Cellar/openjdk@21/21.0.10/libexec/openjdk.jdk/Contents/Home"
+install_test_stable_jdk21="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+install_test_jdk23="/opt/homebrew/Cellar/openjdk/23.0.2/libexec/openjdk.jdk/Contents/Home"
+printf 'export JAVA_HOME=%s\nexport JDK23_HOME=%s\n' \
+  "${install_test_old_jdk21}" "${install_test_jdk23}" \
+  > "${install_test_home}/.bashrc"
+printf 'export PATH="%s/bin:%s"\n' "${install_test_old_jdk21}" "\$PATH" \
+  > "${install_test_home}/.bash_profile"
+cp "${install_test_home}/.bashrc" "${install_test_tmp}/bashrc.expected"
+cp "${install_test_home}/.bash_profile" "${install_test_tmp}/bash_profile.expected"
+
+install_test_shell_dry_output="$(
+  "${install_test_repo_root}/bin/stabilize-jdk21-shell-paths" \
+    --dry-run --home "${install_test_home}"
+)"
+grep -Fq 'DRY RUN: no shell files were changed.' <<< "${install_test_shell_dry_output}"
+cmp "${install_test_home}/.bashrc" "${install_test_tmp}/bashrc.expected"
+cmp "${install_test_home}/.bash_profile" "${install_test_tmp}/bash_profile.expected"
+if compgen -G "${install_test_home}/*.gm-emacs-*.bak" >/dev/null; then
+  echo "Shell-path dry run created a backup file." >&2
+  exit 1
+fi
+
+"${install_test_repo_root}/bin/stabilize-jdk21-shell-paths" \
+  --home "${install_test_home}" >/dev/null
+
+for install_test_shell_file in .bashrc .bash_profile; do
+  if grep -Fq "${install_test_old_jdk21}" "${install_test_home}/${install_test_shell_file}"; then
+    echo "Cellar-specific JDK 21 path remained in ${install_test_shell_file}." >&2
+    exit 1
+  fi
+  grep -Fq "${install_test_stable_jdk21}" "${install_test_home}/${install_test_shell_file}"
+done
+grep -Fq "${install_test_jdk23}" "${install_test_home}/.bashrc"
+
+shopt -s nullglob
+install_test_bashrc_backups=("${install_test_home}"/.bashrc.gm-emacs-*.bak)
+install_test_profile_backups=("${install_test_home}"/.bash_profile.gm-emacs-*.bak)
+shopt -u nullglob
+[[ "${#install_test_bashrc_backups[@]}" -eq 1 ]]
+[[ "${#install_test_profile_backups[@]}" -eq 1 ]]
+cmp "${install_test_bashrc_backups[0]}" "${install_test_tmp}/bashrc.expected"
+cmp "${install_test_profile_backups[0]}" "${install_test_tmp}/bash_profile.expected"
+
+printf 'package runtime\n' > "${install_test_source}/elpa/example"
+printf 'state runtime\n' > "${install_test_source}/var/example"
+install_test_baseline_dry_output="$(
+  "${install_test_repo_root}/bin/capture-install-baseline" \
+    --dry-run \
+    --source-root "${install_test_source}" \
+    --destination-root "${install_test_baselines}" \
+    --home "${install_test_home}"
+)"
+grep -Fq 'DRY RUN: no baseline files were created.' <<< "${install_test_baseline_dry_output}"
+if [[ -e "${install_test_baselines}" ]]; then
+  echo "Baseline dry run created its destination directory." >&2
+  exit 1
+fi
+install_test_baseline_dir="$(
+  "${install_test_repo_root}/bin/capture-install-baseline" \
+    --source-root "${install_test_source}" \
+    --destination-root "${install_test_baselines}" \
+    --home "${install_test_home}"
+)"
+cmp "${install_test_source}/elpa/example" "${install_test_baseline_dir}/elpa/example"
+cmp "${install_test_source}/var/example" "${install_test_baseline_dir}/var/example"
+cmp "${install_test_home}/.bashrc" "${install_test_baseline_dir}/.bashrc.before"
+test -f "${install_test_baseline_dir}/java-home.txt"
+test -f "${install_test_baseline_dir}/jdk-bundles.txt"
+test -f "${install_test_baseline_dir}/emacs-application.txt"
+
+install_test_java_root="${install_test_tmp}/java"
+install_test_java_registry="${install_test_java_root}/java-runtimes.properties"
+install_test_java_marker="${install_test_java_root}/invocations"
+install_test_vendor17="${install_test_java_root}/vendor-17"
+install_test_stable17_prefix="${install_test_java_root}/prefix/opt/openjdk@17"
+install_test_stable17="${install_test_stable17_prefix}/libexec/openjdk.jdk/Contents/Home"
+install_test_stable21_prefix="${install_test_java_root}/prefix/opt/openjdk@21"
+install_test_stable21="${install_test_stable21_prefix}/libexec/openjdk.jdk/Contents/Home"
+install_test_stable21_alias="${install_test_java_root}/jdk21-alias"
+install_test_misleading24_prefix="${install_test_java_root}/prefix/opt/openjdk@24"
+install_test_misleading24="${install_test_misleading24_prefix}/libexec/openjdk.jdk/Contents/Home"
+install_test_generic26_prefix="${install_test_java_root}/prefix/opt/openjdk"
+install_test_generic26="${install_test_generic26_prefix}/libexec/openjdk.jdk/Contents/Home"
+
+mkdir -p "${install_test_java_root}"
+touch "${install_test_java_marker}"
+install_test_make_jdk "${install_test_vendor17}" 17.0.1 "${install_test_java_marker}"
+install_test_make_jdk "${install_test_stable17}" 17.0.12 "${install_test_java_marker}"
+install_test_make_jdk "${install_test_stable21}" 21.0.10 "${install_test_java_marker}"
+install_test_make_jdk "${install_test_misleading24}" 26.0.1 "${install_test_java_marker}"
+install_test_make_jdk "${install_test_generic26}" 26.0.2 "${install_test_java_marker}"
+ln -s "${install_test_stable21}" "${install_test_stable21_alias}"
+
+install_test_java_candidates="$(printf '%s\n' \
+  "${install_test_vendor17}" \
+  "${install_test_stable17_prefix}" \
+  "${install_test_stable21_prefix}" \
+  "${install_test_stable21_alias}" \
+  "${install_test_misleading24_prefix}" \
+  "${install_test_generic26_prefix}")"
+
+install_test_java_dry_registry="${install_test_java_root}/dry-run.properties"
+install_test_java_dry_output="$(
+  HOME="${install_test_home}" \
+  GM_JAVA_REGISTRY_FILE="${install_test_java_dry_registry}" \
+  GM_JAVA_DISCOVERY_CANDIDATES="${install_test_java_candidates}" \
+  GM_JAVA_DISABLE_SYSTEM_DISCOVERY=1 \
+    "${install_test_repo_root}/bin/discover-java-runtimes" --dry-run
+)"
+grep -Fq 'DRY RUN: Java runtime registry would contain:' \
+  <<< "${install_test_java_dry_output}"
+test ! -e "${install_test_java_dry_registry}"
+
+: > "${install_test_java_marker}"
+HOME="${install_test_home}" \
+GM_JAVA_REGISTRY_FILE="${install_test_java_registry}" \
+GM_JAVA_DISCOVERY_CANDIDATES="${install_test_java_candidates}" \
+GM_JAVA_DISABLE_SYSTEM_DISCOVERY=1 \
+  "${install_test_repo_root}/bin/discover-java-runtimes" >/dev/null
+
+grep -Fxq "JDK17=${install_test_stable17}" "${install_test_java_registry}"
+grep -Fxq "JDK21=${install_test_stable21}" "${install_test_java_registry}"
+grep -Fxq "JDK26=${install_test_generic26}" "${install_test_java_registry}"
+if grep -Fq "JDK24=${install_test_misleading24}" "${install_test_java_registry}" || \
+   grep -q '^JDK24=' "${install_test_java_registry}"; then
+  echo "A misleading OpenJDK alias was classified by its formula name." >&2
+  exit 1
+fi
+[[ "$(wc -l < "${install_test_java_marker}" | tr -d ' ')" -eq 5 ]]
+
+GM_JAVA_REGISTRY_FILE="${install_test_java_registry}" \
+  "${install_test_repo_root}/bin/java-runtime-home" METALS_JDK \
+  | grep -Fxq "${install_test_stable17}"
+
+install_test_role_registry="${install_test_java_root}/role-preserved.properties"
+awk '{ if ($1 == "EMACS_JDK=JDK21") print "EMACS_JDK=JDK17"; else print }' \
+  "${install_test_java_registry}" > "${install_test_role_registry}"
+mv "${install_test_role_registry}" "${install_test_java_registry}"
+HOME="${install_test_home}" \
+GM_JAVA_REGISTRY_FILE="${install_test_java_registry}" \
+GM_JAVA_DISCOVERY_CANDIDATES="${install_test_java_candidates}" \
+GM_JAVA_DISABLE_SYSTEM_DISCOVERY=1 \
+  "${install_test_repo_root}/bin/discover-java-runtimes" >/dev/null
+grep -Fxq 'EMACS_JDK=JDK17' "${install_test_java_registry}"
+shopt -s nullglob
+install_test_java_backups=("${install_test_java_registry}".gm-emacs-*.bak)
+shopt -u nullglob
+[[ "${#install_test_java_backups[@]}" -eq 1 ]]
+
+: > "${install_test_java_marker}"
+GM_JAVA_REGISTRY_FILE="${install_test_java_registry}" \
+  "${install_test_repo_root}/bin/discover-java-runtimes" --check >/dev/null
+[[ "$(wc -l < "${install_test_java_marker}" | tr -d ' ')" -eq 3 ]]
+
+install_test_invalid_registry="${install_test_java_root}/invalid.properties"
+printf 'REGISTRY_VERSION=1\nJDK17=%s\nJDK17=%s\nEMACS_JDK=JDK17\nJDTLS_JDK=JDK17\nMETALS_JDK=JDK17\nGROOVY_LS_JDK=JDK17\n' \
+  "${install_test_stable17}" "${install_test_vendor17}" \
+  > "${install_test_invalid_registry}"
+if GM_JAVA_REGISTRY_FILE="${install_test_invalid_registry}" \
+     "${install_test_repo_root}/bin/java-runtime-home" EMACS_JDK >/dev/null 2>&1; then
+  echo "The registry parser accepted a duplicate key." >&2
+  exit 1
+fi
+
+printf 'REGISTRY_VERSION=1\nJDK17=relative/path\nEMACS_JDK=JDK17\nJDTLS_JDK=JDK17\nMETALS_JDK=JDK17\nGROOVY_LS_JDK=JDK17\n' \
+  > "${install_test_invalid_registry}"
+if GM_JAVA_REGISTRY_FILE="${install_test_invalid_registry}" \
+     "${install_test_repo_root}/bin/metals-java17" >/dev/null 2>&1; then
+  echo "The Metals wrapper accepted an invalid registry." >&2
+  exit 1
+fi
+
+install_test_injection_marker="${install_test_java_root}/registry-was-executed"
+# shellcheck disable=SC2016 -- the literal command substitution is test input.
+printf 'REGISTRY_VERSION=1\nJDK17=$(touch %s)\nEMACS_JDK=JDK17\nJDTLS_JDK=JDK17\nMETALS_JDK=JDK17\nGROOVY_LS_JDK=JDK17\n' \
+  "${install_test_injection_marker}" > "${install_test_invalid_registry}"
+if GM_JAVA_REGISTRY_FILE="${install_test_invalid_registry}" \
+     "${install_test_repo_root}/bin/java-runtime-home" JDK17 >/dev/null 2>&1; then
+  echo "The registry parser accepted executable syntax." >&2
+  exit 1
+fi
+test ! -e "${install_test_injection_marker}"
+
+printf '7\n' > "${install_test_stable17}/exit-status"
+if GM_JAVA_REGISTRY_FILE="${install_test_java_registry}" \
+     "${install_test_repo_root}/bin/discover-java-runtimes" --check >/dev/null 2>&1; then
+  echo "Live validation accepted matching output from a failed JVM." >&2
+  exit 1
+fi
+rm "${install_test_stable17}/exit-status"
+
+install_test_groovy_repo="${install_test_tmp}/groovy-repo"
+mkdir -p "${install_test_groovy_repo}/bin"
+cp "${install_test_repo_root}/bin/install-groovy-language-server" \
+  "${install_test_groovy_repo}/bin/install-groovy-language-server"
+install_test_groovy_output="$(
+  "${install_test_groovy_repo}/bin/install-groovy-language-server" --dry-run
+)"
+grep -Fq 'DRY RUN:' <<< "${install_test_groovy_output}"
+if [[ -e "${install_test_groovy_repo}/.cache" ]]; then
+  echo "Groovy Language Server dry run created a cache directory." >&2
+  exit 1
+fi
+
+install_test_bootstrap_output="$(
+  "${install_test_repo_root}/bin/bootstrap-macos" --dry-run
+)"
+grep -Fq 'DRY RUN: no files, packages, applications, taps, or JDK registrations were changed.' \
+  <<< "${install_test_bootstrap_output}"
+
+install_test_registration_output="$(
+  "${install_test_repo_root}/bin/register-jdks-macos" --dry-run 2>&1 || true
+)"
+grep -Fq 'DRY RUN: no privileges were requested and no registrations were changed.' \
+  <<< "${install_test_registration_output}"
+
+install_test_cutover_output="$(
+  "${install_test_repo_root}/bin/cutover-emacs-macos" --dry-run 2>&1 || true
+)"
+grep -Fq 'DRY RUN: no applications, links, processes, or files were changed.' \
+  <<< "${install_test_cutover_output}"
+
+if rg -n 'brew (upgrade|unpin|cleanup|uninstall)' \
+     "${install_test_repo_root}/bin/bootstrap-macos"; then
+  echo "Bootstrap contains a prohibited Homebrew mutation." >&2
+  exit 1
+fi
+grep -Fq 'HOMEBREW_NO_INSTALL_UPGRADE=1' "${install_test_repo_root}/bin/bootstrap-macos"
+grep -Fq 'HOMEBREW_NO_INSTALL_CLEANUP=1' "${install_test_repo_root}/bin/bootstrap-macos"
+grep -Fq 'bundle install --no-upgrade' "${install_test_repo_root}/bin/bootstrap-macos"
+grep -Fq -- '--dry-run' "${install_test_repo_root}/bin/bootstrap-macos"
+grep -Fq '"29.3"' "${install_test_repo_root}/bin/cutover-emacs-macos"
+grep -Fq 'Emacs-29.3-' "${install_test_repo_root}/bin/cutover-emacs-macos"
+grep -Fq 'Refusing to replace non-symlink JDK registration' \
+  "${install_test_repo_root}/bin/register-jdks-macos"
+
+echo "Installation script tests passed."

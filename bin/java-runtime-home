@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+java_registry_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+java_registry_file="${GM_JAVA_REGISTRY_FILE:-${java_registry_repo_root}/var/java-runtimes.properties}"
+
+if [[ "$#" -ne 1 ]]; then
+  echo "Usage: $0 JDK<number>|<ROLE>_JDK" >&2
+  exit 2
+fi
+java_registry_requested_key="$1"
+case "${java_registry_requested_key}" in
+  JDK[0-9]*|EMACS_JDK|JDTLS_JDK|METALS_JDK|GROOVY_LS_JDK) ;;
+  *)
+    echo "Unsupported Java registry lookup: ${java_registry_requested_key}" >&2
+    exit 2
+    ;;
+esac
+if [[ "${java_registry_requested_key}" == JDK* && \
+      ! "${java_registry_requested_key#JDK}" =~ ^[0-9]+$ ]]; then
+  echo "Unsupported Java registry lookup: ${java_registry_requested_key}" >&2
+  exit 2
+fi
+
+if [[ ! -f "${java_registry_file}" ]]; then
+  echo "Java runtime registry is missing: ${java_registry_file}" >&2
+  echo "Run ${java_registry_repo_root}/bin/discover-java-runtimes." >&2
+  exit 1
+fi
+
+java_registry_keys=()
+java_registry_values=()
+java_registry_line_number=0
+
+java_registry_lookup() {
+  java_registry_lookup_key="$1"
+  java_registry_lookup_value=""
+  for java_registry_index in "${!java_registry_keys[@]}"; do
+    if [[ "${java_registry_keys[${java_registry_index}]}" == "${java_registry_lookup_key}" ]]; then
+      java_registry_lookup_value="${java_registry_values[${java_registry_index}]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+while IFS= read -r java_registry_line || [[ -n "${java_registry_line}" ]]; do
+  java_registry_line_number=$((java_registry_line_number + 1))
+  [[ -z "${java_registry_line}" || "${java_registry_line}" == \#* ]] && continue
+  if [[ ! "${java_registry_line}" =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]]; then
+    echo "Invalid Java registry line ${java_registry_line_number}: ${java_registry_line}" >&2
+    exit 1
+  fi
+  java_registry_key="${BASH_REMATCH[1]}"
+  java_registry_value="${BASH_REMATCH[2]}"
+  case "${java_registry_key}" in
+    REGISTRY_VERSION|JDK[0-9]*|EMACS_JDK|JDTLS_JDK|METALS_JDK|GROOVY_LS_JDK) ;;
+    *)
+      echo "Unknown Java registry key on line ${java_registry_line_number}: ${java_registry_key}" >&2
+      exit 1
+      ;;
+  esac
+  if java_registry_lookup "${java_registry_key}"; then
+    echo "Duplicate Java registry key: ${java_registry_key}" >&2
+    exit 1
+  fi
+  java_registry_keys+=("${java_registry_key}")
+  java_registry_values+=("${java_registry_value}")
+done < "${java_registry_file}"
+
+if ! java_registry_lookup REGISTRY_VERSION || [[ "${java_registry_lookup_value}" != "1" ]]; then
+  echo "Unsupported or missing Java registry version in ${java_registry_file}" >&2
+  exit 1
+fi
+
+for java_registry_index in "${!java_registry_keys[@]}"; do
+  java_registry_key="${java_registry_keys[${java_registry_index}]}"
+  java_registry_value="${java_registry_values[${java_registry_index}]}"
+  case "${java_registry_key}" in
+    JDK[0-9]*)
+      if [[ "${java_registry_key}" == "JDK" || ! "${java_registry_key#JDK}" =~ ^[0-9]+$ ]]; then
+        echo "Invalid JDK registry key: ${java_registry_key}" >&2
+        exit 1
+      fi
+      if [[ "${java_registry_value}" != /* || ! -x "${java_registry_value}/bin/java" ]]; then
+        echo "Java registry path is not an executable JDK home: ${java_registry_key}=${java_registry_value}" >&2
+        exit 1
+      fi
+      ;;
+    *_JDK)
+      if [[ ! "${java_registry_value}" =~ ^JDK[0-9]+$ ]]; then
+        echo "Java role ${java_registry_key} has invalid target: ${java_registry_value}" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+for java_registry_index in "${!java_registry_keys[@]}"; do
+  java_registry_key="${java_registry_keys[${java_registry_index}]}"
+  java_registry_value="${java_registry_values[${java_registry_index}]}"
+  if [[ "${java_registry_key}" == *_JDK ]] && ! java_registry_lookup "${java_registry_value}"; then
+    echo "Java role ${java_registry_key} references missing ${java_registry_value}" >&2
+    exit 1
+  fi
+done
+
+if ! java_registry_lookup "${java_registry_requested_key}"; then
+  echo "Java registry key is missing: ${java_registry_requested_key}" >&2
+  exit 1
+fi
+java_registry_resolved_key="${java_registry_requested_key}"
+if [[ "${java_registry_resolved_key}" == *_JDK ]]; then
+  java_registry_resolved_key="${java_registry_lookup_value}"
+  java_registry_lookup "${java_registry_resolved_key}"
+fi
+printf '%s\n' "${java_registry_lookup_value}"

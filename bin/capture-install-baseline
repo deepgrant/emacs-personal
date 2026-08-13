@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+baseline_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+baseline_source_root="${baseline_repo_root}"
+baseline_home="${HOME}"
+baseline_destination_root=""
+baseline_dry_run=false
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --source-root)
+      baseline_source_root="$2"
+      shift 2
+      ;;
+    --destination-root)
+      baseline_destination_root="$2"
+      shift 2
+      ;;
+    --home)
+      baseline_home="$2"
+      shift 2
+      ;;
+    --dry-run)
+      baseline_dry_run=true
+      shift
+      ;;
+    *)
+      echo "Usage: $0 [--source-root DIR] [--destination-root DIR] [--home DIR] [--dry-run]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "${baseline_destination_root}" ]]; then
+  baseline_destination_root="${baseline_home}/.local/state/gm-emacs/baselines"
+fi
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "This command is only for macOS." >&2
+  exit 1
+fi
+
+if [[ "${baseline_dry_run}" == true ]]; then
+  echo "DRY RUN: installation baseline"
+  echo "  destination: ${baseline_destination_root}/<timestamp>-<pid>"
+  echo "  would record: system, Git, Homebrew, Emacs, and every discovered JDK path/version"
+  for baseline_runtime_name in elpa var; do
+    baseline_runtime_source="${baseline_source_root}/${baseline_runtime_name}"
+    if [[ -d "${baseline_runtime_source}" ]]; then
+      echo "  would copy: ${baseline_runtime_source} ($(du -sh "${baseline_runtime_source}" | awk '{print $1}'))"
+    else
+      echo "  absent, would record: ${baseline_runtime_source}"
+    fi
+  done
+  for baseline_shell_name in .bashrc .bash_profile; do
+    if [[ -f "${baseline_home}/${baseline_shell_name}" ]]; then
+      echo "  would copy: ${baseline_home}/${baseline_shell_name}"
+    fi
+  done
+  if command -v brew >/dev/null 2>&1; then
+    echo "  current Homebrew JDK formulae:"
+    brew list --formula --versions 2>/dev/null | \
+      awk '$1 == "openjdk" || $1 ~ /^openjdk@/ {print "    " $0}' | LC_ALL=C sort
+  fi
+  if [[ -x /usr/libexec/java_home ]]; then
+    echo "  current macOS JDK registrations:"
+    /usr/libexec/java_home -V 2>&1 | sed 's/^/    /' || true
+  fi
+  echo "DRY RUN: no baseline files were created."
+  exit 0
+fi
+
+baseline_timestamp="$(date +%Y%m%d-%H%M%S)"
+baseline_directory="${baseline_destination_root}/${baseline_timestamp}-$$"
+mkdir -p "${baseline_directory}"
+
+{
+  printf 'Captured: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'Source: %s\n' "${baseline_source_root}"
+  printf 'System: '
+  uname -a
+  if git -C "${baseline_source_root}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf 'Git revision: %s\n' "$(git -C "${baseline_source_root}" rev-parse HEAD)"
+    printf 'Git branch: %s\n' "$(git -C "${baseline_source_root}" branch --show-current)"
+  fi
+} > "${baseline_directory}/manifest.txt"
+
+if command -v brew >/dev/null 2>&1; then
+  brew list --formula --versions > "${baseline_directory}/homebrew-formulae.txt" 2>&1 || true
+  brew list --cask --versions > "${baseline_directory}/homebrew-casks.txt" 2>&1 || true
+  brew tap > "${baseline_directory}/homebrew-taps.txt" 2>&1 || true
+  brew list --formula --versions 2>/dev/null | \
+    awk '$1 == "openjdk" || $1 ~ /^openjdk@/' | LC_ALL=C sort \
+    > "${baseline_directory}/homebrew-jdks.txt"
+  brew list --formula --versions 2>/dev/null | \
+    awk '$1 ~ /emacs/' | LC_ALL=C sort \
+    > "${baseline_directory}/homebrew-emacs.txt"
+else
+  printf 'Homebrew is not installed.\n' > "${baseline_directory}/homebrew-formulae.txt"
+  : > "${baseline_directory}/homebrew-jdks.txt"
+  : > "${baseline_directory}/homebrew-emacs.txt"
+fi
+
+if [[ -x /usr/libexec/java_home ]]; then
+  /usr/libexec/java_home -V > "${baseline_directory}/java-home.txt" 2>&1 || true
+else
+  printf '/usr/libexec/java_home is unavailable.\n' > "${baseline_directory}/java-home.txt"
+fi
+
+baseline_jdk_report="${baseline_directory}/jdk-bundles.txt"
+: > "${baseline_jdk_report}"
+shopt -s nullglob
+baseline_jdk_bundles=(
+  /Library/Java/JavaVirtualMachines/*.jdk
+  /opt/homebrew/Cellar/openjdk*/*/libexec/*.jdk
+  /opt/homebrew/opt/openjdk*/libexec/*.jdk
+  "${baseline_home}"/.local/share/jdks/*.jdk
+)
+shopt -u nullglob
+for baseline_jdk_bundle in "${baseline_jdk_bundles[@]}"; do
+  baseline_java="${baseline_jdk_bundle}/Contents/Home/bin/java"
+  {
+    printf 'Bundle: %s\n' "${baseline_jdk_bundle}"
+    printf 'Link target: %s\n' "$(readlink "${baseline_jdk_bundle}" 2>/dev/null || printf 'not a symlink')"
+    if [[ -x "${baseline_java}" ]]; then
+      "${baseline_java}" -version 2>&1 | sed 's/^/  /'
+    else
+      printf '  Java executable missing\n'
+    fi
+    printf '\n'
+  } >> "${baseline_jdk_report}"
+done
+
+baseline_emacs_report="${baseline_directory}/emacs-application.txt"
+if [[ -x /Applications/Emacs.app/Contents/MacOS/Emacs ]]; then
+  {
+    printf 'Application: /Applications/Emacs.app\n'
+    printf 'Version: '
+    /Applications/Emacs.app/Contents/MacOS/Emacs --batch -Q \
+      --eval '(princ emacs-version)'
+    printf '\n'
+  } > "${baseline_emacs_report}" 2>&1
+else
+  printf '/Applications/Emacs.app is not installed.\n' > "${baseline_emacs_report}"
+fi
+
+for baseline_runtime_name in elpa var; do
+  baseline_runtime_source="${baseline_source_root}/${baseline_runtime_name}"
+  if [[ -d "${baseline_runtime_source}" ]]; then
+    ditto "${baseline_runtime_source}" \
+      "${baseline_directory}/${baseline_runtime_name}"
+  else
+    printf '%s was not present.\n' "${baseline_runtime_source}" \
+      > "${baseline_directory}/${baseline_runtime_name}.missing.txt"
+  fi
+done
+
+for baseline_shell_name in .bashrc .bash_profile; do
+  if [[ -f "${baseline_home}/${baseline_shell_name}" ]]; then
+    cp -p "${baseline_home}/${baseline_shell_name}" \
+      "${baseline_directory}/${baseline_shell_name}.before"
+  fi
+done
+
+echo "Captured installation baseline at ${baseline_directory}" >&2
+printf '%s\n' "${baseline_directory}"

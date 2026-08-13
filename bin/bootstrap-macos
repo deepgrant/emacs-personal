@@ -2,8 +2,20 @@
 set -euo pipefail
 
 bootstrap_repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-bootstrap_jdk18_url="https://download.java.net/java/GA/jdk18.0.2/f6ad4b4450fd4d298113270ec84f30ee/9/GPL/openjdk-18.0.2_macos-aarch64_bin.tar.gz"
-bootstrap_jdk18_sha="1da591d9ab49c348d5a424975ae44ea940edf1c3b3b4456d0a3020758829799e"
+bootstrap_dry_run=false
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      bootstrap_dry_run=true
+      shift
+      ;;
+    *)
+      echo "Usage: $0 [--dry-run]" >&2
+      exit 2
+      ;;
+  esac
+done
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   echo "This bootstrap supports Apple Silicon macOS only." >&2
@@ -14,35 +26,100 @@ if ! command -v brew >/dev/null 2>&1; then
   exit 1
 fi
 
-# Preserve historical OpenJDK 18 independently because current Homebrew tools
-# require the generic openjdk formula to advance to its supported version.
-bootstrap_jdk18_parent="${HOME}/.local/share/jdks"
-bootstrap_jdk18_home="${bootstrap_jdk18_parent}/jdk-18.0.2.jdk"
-if [[ ! -x "${bootstrap_jdk18_home}/Contents/Home/bin/java" ]]; then
-  mkdir -p "${bootstrap_jdk18_parent}"
-  if [[ -x /opt/homebrew/opt/openjdk/bin/java ]] && \
-     /opt/homebrew/opt/openjdk/bin/java -version 2>&1 | head -n 1 | grep -q '"18\.'; then
-    ditto /opt/homebrew/opt/openjdk/libexec/openjdk.jdk "${bootstrap_jdk18_home}"
-  else
-    bootstrap_tmp="$(mktemp -d)"
-    trap 'rm -rf "${bootstrap_tmp}"' EXIT
-    curl -fL "${bootstrap_jdk18_url}" -o "${bootstrap_tmp}/openjdk18.tar.gz"
-    echo "${bootstrap_jdk18_sha}  ${bootstrap_tmp}/openjdk18.tar.gz" | shasum -a 256 -c -
-    tar -xzf "${bootstrap_tmp}/openjdk18.tar.gz" -C "${bootstrap_jdk18_parent}"
-  fi
+# Homebrew installs must not mutate already-installed formulae, their
+# dependents, or cleanup state on a managed workstation.
+export HOMEBREW_NO_AUTO_UPDATE=1
+export HOMEBREW_NO_INSTALL_UPGRADE=1
+export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+export HOMEBREW_NO_INSTALL_CLEANUP=1
+export HOMEBREW_BUNDLE_NO_UPGRADE=1
+
+if [[ "${bootstrap_dry_run}" == true ]]; then
+  echo "DRY RUN: bootstrap inspection for ${bootstrap_repo_root}"
+  "${bootstrap_repo_root}/bin/capture-install-baseline" --dry-run
+
+  bootstrap_installed_formulae="$(brew list --formula --versions 2>/dev/null || true)"
+  bootstrap_installed_taps="$(brew tap 2>/dev/null || true)"
+  while IFS= read -r bootstrap_brewfile_line; do
+    bootstrap_brewfile_name="$(printf '%s\n' "${bootstrap_brewfile_line}" | awk -F'"' '{print $2}')"
+    [[ -n "${bootstrap_brewfile_name}" ]] || continue
+    case "${bootstrap_brewfile_line}" in
+      tap\ *)
+        if grep -Fqx "${bootstrap_brewfile_name}" <<< "${bootstrap_installed_taps}"; then
+          echo "PRESERVE: Homebrew tap ${bootstrap_brewfile_name}"
+        else
+          echo "WOULD ADD: Homebrew tap ${bootstrap_brewfile_name}"
+        fi
+        ;;
+      brew\ *)
+        bootstrap_brewfile_short="${bootstrap_brewfile_name##*/}"
+        bootstrap_brewfile_current="$(
+          awk -v formula="${bootstrap_brewfile_short}" \
+            '$1 == formula {print; exit}' <<< "${bootstrap_installed_formulae}"
+        )"
+        if [[ -n "${bootstrap_brewfile_current}" ]]; then
+          echo "PRESERVE: ${bootstrap_brewfile_current}"
+        else
+          echo "WOULD INSTALL: Homebrew formula ${bootstrap_brewfile_name}"
+        fi
+        ;;
+      cask\ *)
+        if [[ -d "/opt/homebrew/Caskroom/${bootstrap_brewfile_name}" ]]; then
+          echo "PRESERVE: Homebrew cask ${bootstrap_brewfile_name}"
+        else
+          echo "WOULD INSTALL: Homebrew cask ${bootstrap_brewfile_name}"
+        fi
+        ;;
+    esac
+  done < <(awk '/^(tap|brew|cask) /' "${bootstrap_repo_root}/Brewfile")
+
+  "${bootstrap_repo_root}/bin/stabilize-jdk21-shell-paths" --dry-run
+  "${bootstrap_repo_root}/bin/discover-java-runtimes" --dry-run
+  "${bootstrap_repo_root}/bin/install-groovy-language-server" --dry-run
+  echo "WOULD INSTALL/VERIFY: Node 24 language servers from tools/package-lock.json"
+  echo "WOULD INSTALL/VERIFY: Metals 1.6.8 under ${bootstrap_repo_root}/.local/bin"
+  echo "WOULD INSTALL/VERIFY: Emacs packages, vterm, and Tree-sitter grammars"
+  echo "WOULD VERIFY: every pre-existing Homebrew JDK remains at its recorded version"
+  echo "DRY RUN: no files, packages, applications, taps, or JDK registrations were changed."
+  echo "Inspect the remaining privileged stages with:"
+  echo "  ${bootstrap_repo_root}/bin/register-jdks-macos --dry-run"
+  echo "  ${bootstrap_repo_root}/bin/cutover-emacs-macos --dry-run"
+  exit 0
 fi
-if ! "${bootstrap_jdk18_home}/Contents/Home/bin/java" -version 2>&1 | head -n 1 | grep -q '"18\.0\.2'; then
-  echo "Preserved OpenJDK 18 failed verification." >&2
-  exit 1
-fi
-brew unpin openjdk 2>/dev/null || true
+
+bootstrap_baseline_dir="$("${bootstrap_repo_root}/bin/capture-install-baseline")"
 
 brew tap d12frosted/emacs-plus
 brew tap coursier/formulas
 brew trust d12frosted/emacs-plus
 brew trust coursier/formulas
-brew bundle --file "${bootstrap_repo_root}/Brewfile"
-brew upgrade openjdk@17 openjdk@21 || true
+
+for bootstrap_jdk_formula in openjdk@17 openjdk@21; do
+  if brew list --formula --versions "${bootstrap_jdk_formula}" >/dev/null 2>&1; then
+    echo "Preserving installed $(brew list --formula --versions "${bootstrap_jdk_formula}")"
+  else
+    brew install "${bootstrap_jdk_formula}"
+  fi
+done
+
+brew bundle install --no-upgrade --file "${bootstrap_repo_root}/Brewfile"
+
+while IFS= read -r bootstrap_jdk_line; do
+  [[ -n "${bootstrap_jdk_line}" ]] || continue
+  bootstrap_existing_formula="${bootstrap_jdk_line%% *}"
+  bootstrap_current_jdk="$(brew list --formula --versions "${bootstrap_existing_formula}" 2>/dev/null || true)"
+  if [[ "${bootstrap_current_jdk}" != "${bootstrap_jdk_line}" ]]; then
+    echo "Refusing to continue: existing JDK changed during bootstrap." >&2
+    echo "  before: ${bootstrap_jdk_line}" >&2
+    echo "  after:  ${bootstrap_current_jdk:-missing}" >&2
+    exit 1
+  fi
+done < "${bootstrap_baseline_dir}/homebrew-jdks.txt"
+
+"${bootstrap_repo_root}/bin/stabilize-jdk21-shell-paths"
+
+"${bootstrap_repo_root}/bin/discover-java-runtimes"
+"${bootstrap_repo_root}/bin/discover-java-runtimes" --check
 
 "${bootstrap_repo_root}/bin/install-groovy-language-server"
 

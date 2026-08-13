@@ -7,14 +7,18 @@
 (require 'savehist)
 (require 'saveplace)
 
+(declare-function gm/workspace-current-root "gm-project")
+
 (defgroup gm nil "Personal VSCodium-style Emacs configuration." :group 'environment)
 
 (defconst gm/var-directory
   (expand-file-name "var/" (or (bound-and-true-p gm/config-root) user-emacs-directory)))
 
 (defun gm/project-root ()
-  "Return the current project root, or `default-directory'."
-  (or (when-let* ((project (project-current nil)))
+  "Return the selected workspace/project root, or `default-directory'."
+  (or (and (fboundp 'gm/workspace-current-root)
+           (gm/workspace-current-root))
+      (when-let* ((project (project-current nil)))
         (expand-file-name (project-root project)))
       (locate-dominating-file default-directory ".git")
       default-directory))

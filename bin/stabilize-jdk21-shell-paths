@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+shell_path_home="${HOME}"
+shell_path_dry_run=false
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --home)
+      shell_path_home="$2"
+      shift 2
+      ;;
+    --dry-run)
+      shell_path_dry_run=true
+      shift
+      ;;
+    *)
+      echo "Usage: $0 [--home DIR] [--dry-run]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+shell_path_timestamp="$(date +%Y%m%d-%H%M%S)"
+shell_path_pattern='/opt/homebrew/Cellar/openjdk@21/[^/]+/libexec/openjdk\.jdk/Contents/Home'
+shell_path_stable='/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home'
+shell_path_changes=0
+
+for shell_path_name in .bashrc .bash_profile; do
+  shell_path_file="${shell_path_home}/${shell_path_name}"
+  [[ -f "${shell_path_file}" ]] || continue
+  if ! grep -Eq "${shell_path_pattern}" "${shell_path_file}"; then
+    continue
+  fi
+
+  shell_path_changes=$((shell_path_changes + 1))
+  if [[ "${shell_path_dry_run}" == true ]]; then
+    echo "DRY RUN: would update ${shell_path_file}"
+    echo "  replacement: ${shell_path_stable}"
+    echo "  backup: ${shell_path_file}.gm-emacs-<timestamp>-<pid>.bak"
+    continue
+  fi
+
+  shell_path_backup="${shell_path_file}.gm-emacs-${shell_path_timestamp}-$$.bak"
+  cp -p "${shell_path_file}" "${shell_path_backup}"
+  /usr/bin/perl -pi -e \
+    's{/opt/homebrew/Cellar/openjdk\@21/[^/]+/libexec/openjdk\.jdk/Contents/Home}{/opt/homebrew/opt/openjdk\@21/libexec/openjdk.jdk/Contents/Home}g' \
+    "${shell_path_file}"
+
+  if grep -Eq "${shell_path_pattern}" "${shell_path_file}"; then
+    echo "Failed to replace every Cellar-specific JDK 21 path in ${shell_path_file}." >&2
+    cp -p "${shell_path_backup}" "${shell_path_file}"
+    exit 1
+  fi
+  if ! grep -Fq "${shell_path_stable}" "${shell_path_file}"; then
+    echo "Stable JDK 21 path was not written to ${shell_path_file}." >&2
+    cp -p "${shell_path_backup}" "${shell_path_file}"
+    exit 1
+  fi
+  echo "Updated ${shell_path_file}; backup: ${shell_path_backup}"
+done
+
+if [[ "${shell_path_dry_run}" == true ]]; then
+  if [[ "${shell_path_changes}" -eq 0 ]]; then
+    echo "DRY RUN: no Cellar-specific JDK 21 shell paths found."
+  fi
+  echo "DRY RUN: no shell files were changed."
+fi
