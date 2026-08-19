@@ -59,15 +59,8 @@ only that server, run `./bin/install-groovy-language-server`. Its proposed build
 can be inspected independently with
 `./bin/install-groovy-language-server --dry-run`.
 
-If `.bashrc` or `.bash_profile` contains a Cellar-version-specific OpenJDK 21
-path, bootstrap replaces only that path with the stable
-`/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` symlink. Each
-changed file receives a timestamped adjacent backup first. Other JDK paths are
-not modified.
-
 The baseline and shell-path stages can also be previewed independently with
-`./bin/capture-install-baseline --dry-run` and
-`./bin/stabilize-jdk21-shell-paths --dry-run`.
+`./bin/capture-install-baseline --dry-run`
 
 It deliberately does not alter `/Applications` or `/Library`. After bootstrap,
 register the JDKs and cut over the GUI application:
